@@ -1,0 +1,19 @@
+[pge]
+username = "you@example.com"
+password = "your-pge-password"
+# Optional: TOTP secret for automated MFA (if using authenticator app)
+# totp_secret = ""
+
+[database]
+# Path to SQLite file, relative to this config or absolute
+path = "data/pge_tracker.db"
+
+[preferences]
+timezone = "America/Los_Angeles"
+# PG&E E-TOU-C peak hours: weekdays 4pm-9pm Pacific
+peak_hours_start = 16
+peak_hours_end = 21
+# "electric" | "gas" | "both"
+default_meter = "both"
+# Days of history to fetch on first sync (max 1095 = 3 years)
+initial_fetch_days = 365
