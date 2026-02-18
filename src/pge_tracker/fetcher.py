@@ -207,13 +207,30 @@ async def fetch_all(
         except opower.MfaChallenge as mfa:
             new_login_data = await _handle_mfa(mfa)
             _save_login_data(config, new_login_data)
+            # Re-login with the MFA login_data to establish a valid session
+            api.login_data = new_login_data
+            await api.async_login()
         except opower.InvalidAuth:
-            raise SystemExit(
-                "Authentication failed. Check your PG&E credentials in config.toml."
-            )
-
-        # If login succeeded without MFA and we don't have saved data, try to save
-        # (some utilities return login_data from initial login)
+            # If we had saved login_data that expired, clear it and retry
+            if login_data:
+                logger.info("Saved login data rejected, retrying fresh login")
+                _session_path(config).unlink(missing_ok=True)
+                api.login_data = {}
+                try:
+                    await api.async_login()
+                except opower.MfaChallenge as mfa:
+                    new_login_data = await _handle_mfa(mfa)
+                    _save_login_data(config, new_login_data)
+                    api.login_data = new_login_data
+                    await api.async_login()
+                except opower.InvalidAuth:
+                    raise SystemExit(
+                        "Authentication failed. Check your PG&E credentials in config.toml."
+                    )
+            else:
+                raise SystemExit(
+                    "Authentication failed. Check your PG&E credentials in config.toml."
+                )
 
         # Get accounts
         accounts = await api.async_get_accounts()
@@ -309,12 +326,20 @@ async def fetch_all(
                         end_time=end_date.isoformat(),
                     )
                 except Exception as e:
-                    msg = f"Error fetching hourly usage for {record.id}: {e}"
-                    logger.error(msg)
-                    errors.append(msg)
-                    db.log_fetch(
-                        record.id, "usage_hourly", status="error", error_message=str(e)
-                    )
+                    err_str = str(e)
+                    if "not supported by account's read_resolution" in err_str:
+                        # Gas meters only support daily reads — not an error
+                        logger.info(
+                            "Account %s does not support hourly reads (daily-only meter)",
+                            record.id,
+                        )
+                    else:
+                        msg = f"Error fetching hourly usage for {record.id}: {e}"
+                        logger.error(msg)
+                        errors.append(msg)
+                        db.log_fetch(
+                            record.id, "usage_hourly", status="error", error_message=err_str
+                        )
 
         # --- Forecasts ---
         if fetch_forecasts:
