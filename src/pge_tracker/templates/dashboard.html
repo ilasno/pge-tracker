@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PG&amp;E Energy Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --surface-2: #334155;
+            --border: #475569;
+            --text: #f1f5f9;
+            --text-dim: #94a3b8;
+            --accent: #38bdf8;
+            --peak: #ef4444;
+            --peak-bg: rgba(239,68,68,0.15);
+            --part-peak: #f59e0b;
+            --part-peak-bg: rgba(245,158,11,0.15);
+            --offpeak: #22c55e;
+            --offpeak-bg: rgba(34,197,94,0.15);
+            --cost: #a78bfa;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 1rem; }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        header h1 span { font-size: 1.75rem; }
+        .header-meta {
+            display: flex;
+            gap: 1.5rem;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            flex-wrap: wrap;
+        }
+        .header-meta strong { color: var(--text); }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .controls label {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        .controls select, .controls input {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.85rem;
+        }
+        .controls select:focus, .controls input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .btn {
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: 6px;
+            padding: 0.4rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn:hover { opacity: 0.85; }
+
+        /* Cards grid */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .kpi-card {
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            border: 1px solid var(--border);
+        }
+        .kpi-card .label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .kpi-card .value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-top: 0.25rem;
+        }
+        .kpi-card .sub {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.15rem;
+        }
+
+        /* Chart sections */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+        .chart-row-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+        @media (max-width: 900px) {
+            .chart-row-2 { grid-template-columns: 1fr; }
+        }
+        .card {
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 1.25rem;
+            border: 1px solid var(--border);
+        }
+        .card h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .card h2 .icon { font-size: 1.2rem; }
+        .chart-wrap {
+            position: relative;
+            width: 100%;
+        }
+
+        /* Heatmap */
+        .heatmap-grid {
+            display: grid;
+            grid-template-columns: 45px repeat(7, 1fr);
+            gap: 2px;
+            font-size: 0.7rem;
+        }
+        .heatmap-label {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 6px;
+            color: var(--text-dim);
+        }
+        .heatmap-header {
+            text-align: center;
+            color: var(--text-dim);
+            font-weight: 600;
+            padding: 4px 0;
+        }
+        .heatmap-cell {
+            border-radius: 3px;
+            min-height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            color: transparent;
+            transition: all 0.15s;
+            cursor: default;
+        }
+        .heatmap-cell:hover {
+            color: white;
+            transform: scale(1.1);
+            z-index: 1;
+        }
+
+        /* Peak days */
+        .peak-day-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .peak-day-item {
+            background: var(--surface-2);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            border-left: 4px solid var(--peak);
+        }
+        .peak-day-item .day-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .peak-day-item .day-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .peak-day-item .day-cost {
+            color: var(--peak);
+            font-weight: 700;
+        }
+        .peak-day-item .day-bar {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .peak-day-item .day-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--peak), var(--part-peak));
+            border-radius: 3px;
+        }
+        .peak-day-item .day-stats {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        /* TOU breakdown */
+        .tou-bar {
+            display: flex;
+            height: 32px;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 0.75rem;
+        }
+        .tou-bar .segment {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: white;
+            transition: flex 0.3s;
+        }
+        .tou-legend {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.8rem;
+        }
+        .tou-legend .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+        }
+
+        /* Savings banner */
+        .savings-banner {
+            background: linear-gradient(135deg, #064e3b, #065f46);
+            border: 1px solid #10b981;
+            border-radius: 10px;
+            padding: 1.25rem;
+            margin-top: 1.5rem;
+        }
+        .savings-banner h3 {
+            font-size: 1rem;
+            color: #6ee7b7;
+            margin-bottom: 0.5rem;
+        }
+        .savings-banner .savings-amount {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #34d399;
+        }
+        .savings-banner .savings-detail {
+            color: #a7f3d0;
+            font-size: 0.85rem;
+            margin-top: 0.25rem;
+        }
+        .savings-tips {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #10b98144;
+        }
+        .savings-tips li {
+            color: #d1fae5;
+            font-size: 0.85rem;
+            margin-bottom: 0.35rem;
+            list-style: none;
+            padding-left: 1.2rem;
+            position: relative;
+        }
+        .savings-tips li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: #6ee7b7;
+        }
+
+        /* Loading / error */
+        .loading {
+            text-align: center;
+            color: var(--text-dim);
+            padding: 3rem;
+        }
+        .loading .spinner {
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error {
+            background: rgba(239,68,68,0.1);
+            border: 1px solid var(--peak);
+            border-radius: 8px;
+            padding: 1rem;
+            color: #fca5a5;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            padding: 2rem 0 1rem;
+            border-top: 1px solid var(--border);
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1><span>&#9889;</span> PG&amp;E Energy Dashboard</h1>
+        <div class="header-meta">
+            <span>Rate Plan: <strong id="ratePlanLabel">{{ rate_plan }}</strong></span>
+            <span>Updated: <strong id="lastUpdated">—</strong></span>
+        </div>
+    </header>
+
+    <div class="controls">
+        <label for="accountSelect">Account:</label>
+        <select id="accountSelect"></select>
+        <label for="daysSelect">Period:</label>
+        <select id="daysSelect">
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="60">Last 60 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="180">Last 6 months</option>
+            <option value="365">Last year</option>
+        </select>
+        <button class="btn" onclick="refreshAll()">Refresh</button>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid" id="kpiCards">
+        <div class="kpi-card">
+            <div class="label">Total Usage</div>
+            <div class="value" id="kpiUsage">—</div>
+            <div class="sub" id="kpiUsageSub">kWh</div>
+        </div>
+        <div class="kpi-card">
+            <div class="label">Total Cost</div>
+            <div class="value" id="kpiCost">—</div>
+            <div class="sub" id="kpiCostSub">this period</div>
+        </div>
+        <div class="kpi-card">
+            <div class="label">Daily Average</div>
+            <div class="value" id="kpiDailyAvg">—</div>
+            <div class="sub" id="kpiDailyAvgSub">kWh/day</div>
+        </div>
+        <div class="kpi-card">
+            <div class="label">Peak Usage</div>
+            <div class="value" id="kpiPeakPct">—</div>
+            <div class="sub" id="kpiPeakSub">of daily usage during peak</div>
+        </div>
+        <div class="kpi-card">
+            <div class="label">30-Day Projection</div>
+            <div class="value" id="kpiProjection">—</div>
+            <div class="sub" id="kpiProjectionSub">next 30 days</div>
+        </div>
+        <div class="kpi-card">
+            <div class="label">Potential Savings</div>
+            <div class="value" id="kpiSavings" style="color: var(--offpeak)">—</div>
+            <div class="sub" id="kpiSavingsSub">per month</div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-grid">
+        <!-- Daily Usage Chart -->
+        <div class="card">
+            <h2><span class="icon">&#128200;</span> Daily Usage &amp; Cost</h2>
+            <div class="chart-wrap">
+                <canvas id="dailyChart" height="280"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-row-2">
+            <!-- Hourly Profile -->
+            <div class="card">
+                <h2><span class="icon">&#9200;</span> Average Hourly Profile</h2>
+                <div class="chart-wrap">
+                    <canvas id="hourlyChart" height="300"></canvas>
+                </div>
+            </div>
+
+            <!-- TOU Breakdown + Heatmap -->
+            <div class="card">
+                <h2><span class="icon">&#128293;</span> Weekly Heatmap</h2>
+                <div id="heatmapContainer">
+                    <div class="loading"><div class="spinner"></div><p>Loading...</p></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chart-row-2">
+            <!-- Monthly Trend -->
+            <div class="card">
+                <h2><span class="icon">&#128197;</span> Monthly Trend</h2>
+                <div class="chart-wrap">
+                    <canvas id="monthlyChart" height="280"></canvas>
+                </div>
+            </div>
+
+            <!-- Peak Days -->
+            <div class="card">
+                <h2><span class="icon">&#9888;&#65039;</span> Worst Peak Days</h2>
+                <div id="peakDaysContainer">
+                    <div class="loading"><div class="spinner"></div><p>Loading...</p></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Savings Banner -->
+    <div class="savings-banner" id="savingsBanner" style="display: none;">
+        <h3>&#128161; Peak-Shift Savings Opportunity</h3>
+        <div class="savings-amount" id="savingsAmount">$0</div>
+        <div class="savings-detail" id="savingsDetail"></div>
+        <ul class="savings-tips">
+            <li>Schedule EV charging to start at midnight</li>
+            <li>Run dishwasher &amp; laundry before 3pm or after midnight</li>
+            <li>Pre-cool your home by 3:30pm, coast through peak hours</li>
+            <li>Set pool pump to run in the morning</li>
+        </ul>
+    </div>
+
+    <footer>
+        PG&amp;E Energy Dashboard &mdash; pge-tracker v0.1.0 &mdash; Data refreshes with <code>pge-tracker sync</code>
+    </footer>
+</div>
+
+<script>
+    // -- Config --
+    const HOUR_LABELS = [
+        '12am','1am','2am','3am','4am','5am','6am','7am',
+        '8am','9am','10am','11am','12pm','1pm','2pm','3pm',
+        '4pm','5pm','6pm','7pm','8pm','9pm','10pm','11pm'
+    ];
+    const PEAK_COLOR = '#ef4444';
+    const PART_PEAK_COLOR = '#f59e0b';
+    const OFFPEAK_COLOR = '#22c55e';
+    const COST_COLOR = '#a78bfa';
+    const USAGE_COLOR = '#38bdf8';
+
+    let charts = {};
+    let currentAccountId = null;
+
+    // -- Init --
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadAccounts();
+        refreshAll();
+    });
+
+    async function loadAccounts() {
+        try {
+            const res = await fetch('/api/accounts');
+            const accounts = await res.json();
+            const sel = document.getElementById('accountSelect');
+            sel.innerHTML = '';
+
+            // Prefer electric accounts
+            const electric = accounts.filter(a => a.meter_type === 'ELECTRIC');
+            const gas = accounts.filter(a => a.meter_type === 'GAS');
+
+            for (const a of electric) {
+                const opt = document.createElement('option');
+                opt.value = a.id;
+                opt.textContent = `⚡ Electric (${a.account_number || a.id})`;
+                sel.appendChild(opt);
+            }
+            for (const a of gas) {
+                const opt = document.createElement('option');
+                opt.value = a.id;
+                opt.textContent = `🔥 Gas (${a.account_number || a.id})`;
+                sel.appendChild(opt);
+            }
+
+            if (electric.length > 0) {
+                sel.value = electric[0].id;
+            }
+            currentAccountId = sel.value;
+
+            sel.addEventListener('change', () => {
+                currentAccountId = sel.value;
+                refreshAll();
+            });
+        } catch (e) {
+            console.error('Failed to load accounts:', e);
+        }
+    }
+
+    function getDays() {
+        return parseInt(document.getElementById('daysSelect').value);
+    }
+
+    document.getElementById('daysSelect').addEventListener('change', () => refreshAll());
+
+    async function refreshAll() {
+        if (!currentAccountId) return;
+        const days = getDays();
+
+        // Fetch all data in parallel
+        const [summaryRes, dailyRes, hourlyRes, heatmapRes, peakRes, monthlyRes] = await Promise.all([
+            fetch(`/api/summary?account_id=${currentAccountId}&days=${days}`),
+            fetch(`/api/daily?account_id=${currentAccountId}&days=${days}`),
+            fetch(`/api/hourly-profile?account_id=${currentAccountId}&days=${days}`),
+            fetch(`/api/heatmap?account_id=${currentAccountId}&days=${days}`),
+            fetch(`/api/peak-days?account_id=${currentAccountId}&days=${days}&top_n=5`),
+            fetch(`/api/monthly?account_id=${currentAccountId}&months=12`),
+        ]);
+
+        const [summary, daily, hourly, heatmap, peakDays, monthly] = await Promise.all([
+            summaryRes.json(), dailyRes.json(), hourlyRes.json(),
+            heatmapRes.json(), peakRes.json(), monthlyRes.json(),
+        ]);
+
+        updateKPIs(summary);
+        renderDailyChart(daily);
+        renderHourlyChart(hourly);
+        renderHeatmap(heatmap);
+        renderPeakDays(peakDays);
+        renderMonthlyChart(monthly);
+        updateSavingsBanner(summary);
+
+        document.getElementById('lastUpdated').textContent = new Date().toLocaleString();
+    }
+
+    // -- KPIs --
+    function updateKPIs(s) {
+        document.getElementById('kpiUsage').textContent = s.total_usage_kwh.toLocaleString(undefined, {maximumFractionDigits: 0}) + ' kWh';
+        document.getElementById('kpiUsageSub').textContent = `over ${s.days_analyzed} days`;
+
+        document.getElementById('kpiCost').textContent = '$' + s.total_cost.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        document.getElementById('kpiCostSub').textContent = `avg $${s.avg_daily_cost.toFixed(2)}/day`;
+
+        document.getElementById('kpiDailyAvg').textContent = s.avg_daily_usage.toFixed(1);
+        document.getElementById('kpiDailyAvgSub').textContent = 'kWh per day';
+
+        if (s.tou) {
+            document.getElementById('kpiPeakPct').textContent = s.tou.peak_pct.toFixed(0) + '%';
+            document.getElementById('kpiPeakSub').textContent = `${s.tou.peak_kwh_daily.toFixed(1)} kWh/day peak`;
+        }
+
+        if (s.projection && s.projection.projected_cost) {
+            document.getElementById('kpiProjection').textContent = '$' + s.projection.projected_cost.toFixed(0);
+            const trendIcon = s.projection.trend === 'increasing' ? '↑' :
+                             s.projection.trend === 'decreasing' ? '↓' : '→';
+            document.getElementById('kpiProjectionSub').textContent = `${trendIcon} ${s.projection.trend} (${s.projection.confidence})`;
+        }
+
+        if (s.tou && s.tou.est_monthly_savings_high > 1) {
+            document.getElementById('kpiSavings').textContent = `$${s.tou.est_monthly_savings_low.toFixed(0)}–$${s.tou.est_monthly_savings_high.toFixed(0)}`;
+            document.getElementById('kpiSavingsSub').textContent = 'by shifting peak usage';
+        }
+    }
+
+    // -- Daily Chart --
+    function renderDailyChart(data) {
+        const ctx = document.getElementById('dailyChart').getContext('2d');
+        if (charts.daily) charts.daily.destroy();
+
+        const labels = data.map(d => {
+            const dt = new Date(d.day + 'T12:00:00');
+            return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        });
+
+        const bgColors = data.map(d => d.is_weekend ? 'rgba(56,189,248,0.3)' : 'rgba(56,189,248,0.6)');
+
+        charts.daily = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Usage (kWh)',
+                        data: data.map(d => d.usage),
+                        backgroundColor: bgColors,
+                        borderColor: USAGE_COLOR,
+                        borderWidth: 1,
+                        borderRadius: 3,
+                        yAxisID: 'y',
+                        order: 2,
+                    },
+                    {
+                        label: 'Cost ($)',
+                        data: data.map(d => d.cost),
+                        type: 'line',
+                        borderColor: COST_COLOR,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                        order: 1,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#94a3b8', usePointStyle: true } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.datasetIndex === 0) return `${ctx.parsed.y.toFixed(1)} kWh`;
+                                if (ctx.parsed.y != null) return `$${ctx.parsed.y.toFixed(2)}`;
+                                return '—';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#64748b', maxRotation: 45, font: { size: 10 } },
+                        grid: { color: 'rgba(71,85,105,0.3)' }
+                    },
+                    y: {
+                        position: 'left',
+                        title: { display: true, text: 'kWh', color: '#94a3b8' },
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: 'rgba(71,85,105,0.3)' },
+                        beginAtZero: true,
+                    },
+                    y1: {
+                        position: 'right',
+                        title: { display: true, text: 'Cost ($)', color: '#94a3b8' },
+                        ticks: { color: '#a78bfa', callback: v => '$' + v.toFixed(0) },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true,
+                    }
+                }
+            }
+        });
+    }
+
+    // -- Hourly Profile --
+    function renderHourlyChart(data) {
+        const ctx = document.getElementById('hourlyChart').getContext('2d');
+        if (charts.hourly) charts.hourly.destroy();
+
+        const bgColors = data.map(h => {
+            if (h.period === 'peak') return PEAK_COLOR;
+            if (h.period === 'part_peak') return PART_PEAK_COLOR;
+            return OFFPEAK_COLOR;
+        });
+        const bgAlpha = data.map(h => {
+            if (h.period === 'peak') return 'rgba(239,68,68,0.7)';
+            if (h.period === 'part_peak') return 'rgba(245,158,11,0.7)';
+            return 'rgba(34,197,94,0.5)';
+        });
+
+        charts.hourly = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: HOUR_LABELS,
+                datasets: [
+                    {
+                        label: 'Avg kWh',
+                        data: data.map(h => h.avg_usage),
+                        backgroundColor: bgAlpha,
+                        borderColor: bgColors,
+                        borderWidth: 1,
+                        borderRadius: 3,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'Est. Cost ($)',
+                        data: data.map(h => h.est_cost),
+                        type: 'line',
+                        borderColor: COST_COLOR,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        pointHoverRadius: 5,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#94a3b8', usePointStyle: true } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.datasetIndex === 0) return `${ctx.parsed.y.toFixed(3)} kWh`;
+                                return `$${ctx.parsed.y.toFixed(4)}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#64748b', font: { size: 10 } },
+                        grid: { color: 'rgba(71,85,105,0.3)' }
+                    },
+                    y: {
+                        position: 'left',
+                        title: { display: true, text: 'kWh', color: '#94a3b8' },
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: 'rgba(71,85,105,0.3)' },
+                        beginAtZero: true,
+                    },
+                    y1: {
+                        position: 'right',
+                        title: { display: true, text: '$/hr', color: '#94a3b8' },
+                        ticks: { color: '#a78bfa', callback: v => '$' + v.toFixed(2) },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true,
+                    }
+                }
+            }
+        });
+    }
+
+    // -- Heatmap --
+    function renderHeatmap(data) {
+        const container = document.getElementById('heatmapContainer');
+        const matrix = data.matrix;
+        const days = data.days;
+        const peakStart = data.peak_hours[0];
+        const peakEnd = data.peak_hours[1];
+        const ppRanges = data.part_peak_hours;
+
+        // Find value range
+        const allVals = matrix.flat().filter(v => v > 0);
+        if (allVals.length === 0) {
+            container.innerHTML = '<p style="color:var(--text-dim)">No hourly data available.</p>';
+            return;
+        }
+        allVals.sort((a, b) => a - b);
+        const max = allVals[allVals.length - 1];
+
+        function getColor(val, hour) {
+            if (val === 0) return 'var(--surface-2)';
+            const intensity = Math.min(val / max, 1);
+
+            let isPeak = hour >= peakStart && hour < peakEnd;
+            let isPP = ppRanges.some(([s, e]) => hour >= s && hour < e);
+
+            if (isPeak) {
+                return `rgba(239,68,68,${0.15 + intensity * 0.85})`;
+            } else if (isPP) {
+                return `rgba(245,158,11,${0.15 + intensity * 0.85})`;
+            } else {
+                return `rgba(34,197,94,${0.1 + intensity * 0.6})`;
+            }
+        }
+
+        let html = '<div class="heatmap-grid">';
+        // Header row
+        html += '<div></div>';
+        for (const d of days) {
+            html += `<div class="heatmap-header">${d}</div>`;
+        }
+
+        for (let hour = 0; hour < 24; hour++) {
+            html += `<div class="heatmap-label">${HOUR_LABELS[hour]}</div>`;
+            for (let dow = 0; dow < 7; dow++) {
+                const val = matrix[dow][hour];
+                const bg = getColor(val, hour);
+                html += `<div class="heatmap-cell" style="background:${bg}" title="${days[dow]} ${HOUR_LABELS[hour]}: ${val.toFixed(2)} kWh">${val.toFixed(1)}</div>`;
+            }
+        }
+        html += '</div>';
+
+        // Legend
+        html += `<div style="display:flex;gap:1rem;margin-top:0.5rem;font-size:0.75rem;color:var(--text-dim);">
+            <span><span style="display:inline-block;width:12px;height:12px;background:var(--peak);border-radius:2px;vertical-align:middle;margin-right:3px;"></span> Peak (4-9pm)</span>
+            <span><span style="display:inline-block;width:12px;height:12px;background:var(--part-peak);border-radius:2px;vertical-align:middle;margin-right:3px;"></span> Part-Peak</span>
+            <span><span style="display:inline-block;width:12px;height:12px;background:var(--offpeak);border-radius:2px;vertical-align:middle;margin-right:3px;"></span> Off-Peak</span>
+        </div>`;
+
+        container.innerHTML = html;
+    }
+
+    // -- Peak Days --
+    function renderPeakDays(data) {
+        const container = document.getElementById('peakDaysContainer');
+        if (!data || data.length === 0) {
+            container.innerHTML = '<p style="color:var(--text-dim)">No peak day data available.</p>';
+            return;
+        }
+
+        const maxPeak = Math.max(...data.map(d => d.peak_total));
+
+        let html = '<div class="peak-day-list">';
+        for (const d of data) {
+            const dt = new Date(d.day + 'T12:00:00');
+            const formatted = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const pct = (d.peak_total / maxPeak * 100).toFixed(0);
+
+            html += `
+            <div class="peak-day-item">
+                <div class="day-header">
+                    <span class="day-name">${formatted}</span>
+                    <span class="day-cost">$${d.est_peak_cost.toFixed(2)} peak cost</span>
+                </div>
+                <div class="day-bar"><div class="day-bar-fill" style="width:${pct}%"></div></div>
+                <div class="day-stats">
+                    <span>Peak: ${d.peak_total.toFixed(1)} kWh</span>
+                    <span>Total: ${d.daily_total.toFixed(1)} kWh</span>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    // -- Monthly Chart --
+    function renderMonthlyChart(data) {
+        const ctx = document.getElementById('monthlyChart').getContext('2d');
+        if (charts.monthly) charts.monthly.destroy();
+
+        const labels = data.map(d => d.label);
+        const usages = data.map(d => d.total_usage);
+        const costs = data.map(d => d.total_cost);
+
+        charts.monthly = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Usage (kWh)',
+                        data: usages,
+                        backgroundColor: 'rgba(56,189,248,0.5)',
+                        borderColor: USAGE_COLOR,
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        yAxisID: 'y',
+                        order: 2,
+                    },
+                    {
+                        label: 'Cost ($)',
+                        data: costs,
+                        type: 'line',
+                        borderColor: COST_COLOR,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        pointRadius: 4,
+                        pointBackgroundColor: COST_COLOR,
+                        tension: 0.3,
+                        yAxisID: 'y1',
+                        order: 1,
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#94a3b8', usePointStyle: true } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.datasetIndex === 0) return `${ctx.parsed.y.toFixed(0)} kWh`;
+                                if (ctx.parsed.y != null) return `$${ctx.parsed.y.toFixed(2)}`;
+                                return '—';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#64748b', font: { size: 10 } },
+                        grid: { color: 'rgba(71,85,105,0.3)' }
+                    },
+                    y: {
+                        position: 'left',
+                        title: { display: true, text: 'kWh', color: '#94a3b8' },
+                        ticks: { color: '#94a3b8' },
+                        grid: { color: 'rgba(71,85,105,0.3)' },
+                        beginAtZero: true,
+                    },
+                    y1: {
+                        position: 'right',
+                        title: { display: true, text: 'Cost ($)', color: '#94a3b8' },
+                        ticks: { color: '#a78bfa', callback: v => '$' + v.toFixed(0) },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true,
+                    }
+                }
+            }
+        });
+    }
+
+    // -- Savings Banner --
+    function updateSavingsBanner(summary) {
+        const banner = document.getElementById('savingsBanner');
+        if (!summary.tou || summary.tou.est_monthly_savings_high <= 1) {
+            banner.style.display = 'none';
+            return;
+        }
+        banner.style.display = 'block';
+
+        const low = summary.tou.est_monthly_savings_low;
+        const high = summary.tou.est_monthly_savings_high;
+        document.getElementById('savingsAmount').textContent = `$${low.toFixed(0)}–$${high.toFixed(0)}/month`;
+
+        const annual = `$${(low * 12).toFixed(0)}–$${(high * 12).toFixed(0)}`;
+        const rateDiff = (summary.tou.peak_rate - summary.tou.offpeak_rate).toFixed(2);
+        document.getElementById('savingsDetail').textContent =
+            `${annual}/year potential — shift usage from peak ($${summary.tou.peak_rate}/kWh) to off-peak ($${summary.tou.offpeak_rate}/kWh), saving $${rateDiff}/kWh`;
+    }
+</script>
+</body>
+</html>

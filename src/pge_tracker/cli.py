@@ -543,6 +543,38 @@ def peak(
 
 
 @app.command()
+def web(
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+    host: str = typer.Option("0.0.0.0", "--host", "-H", help="Bind address"),
+    port: int = typer.Option(8080, "--port", "-p", help="Port number"),
+) -> None:
+    """Launch the web dashboard (accessible on your local network)."""
+    import socket
+
+    from .web import run_dashboard
+
+    config = _get_config(config_path)
+
+    # Show helpful startup info
+    console.print(f"\n[bold cyan]PG&E Energy Dashboard[/bold cyan]")
+    console.print(f"  Local:   [link]http://localhost:{port}[/link]")
+
+    # Try to get the LAN IP for family access
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        console.print(f"  Network: [link]http://{local_ip}:{port}[/link]")
+    except Exception:
+        pass
+
+    console.print(f"\n  Press [bold]Ctrl+C[/bold] to stop.\n")
+
+    run_dashboard(config, host=host, port=port)
+
+
+@app.command()
 def version() -> None:
     """Show version."""
     console.print(f"pge-tracker {__version__}")
