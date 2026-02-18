@@ -16,10 +16,15 @@ from .models import (
     DailyStats,
     FetchSummary,
     ForecastRecord,
+    HourOfDayStats,
     MeterType,
+    PeakDayDetail,
     PeriodSummary,
+    RatePlan,
     SeasonalPattern,
+    ShiftSavings,
     TouAnalysis,
+    TouPeriod,
     UsageRecord,
     YoyComparison,
 )
@@ -486,3 +491,293 @@ def print_import_summary(
         lines.append(f"Date range: {date_range[0]} to {date_range[1]}")
 
     console.print(Panel("\n".join(lines), title="Import Complete", border_style="green"))
+
+
+# --- Peak analysis views ---
+
+_HOUR_LABELS = [
+    "12am", " 1am", " 2am", " 3am", " 4am", " 5am",
+    " 6am", " 7am", " 8am", " 9am", "10am", "11am",
+    "12pm", " 1pm", " 2pm", " 3pm", " 4pm", " 5pm",
+    " 6pm", " 7pm", " 8pm", " 9pm", "10pm", "11pm",
+]
+
+
+def print_hourly_profile(
+    profile: list[HourOfDayStats],
+    console: Console | None = None,
+) -> None:
+    """Render a 24-hour bar chart of average usage with cost and TOU markers."""
+    if console is None:
+        console = Console()
+
+    if not profile or all(h.count == 0 for h in profile):
+        console.print("[dim]No hourly data available.[/dim]")
+        return
+
+    max_usage = max(h.avg_usage for h in profile) if profile else 1.0
+
+    table = Table(
+        show_header=True, show_lines=False, padding=(0, 1),
+        title="Your Average Day",
+    )
+    table.add_column("Hour", width=5)
+    table.add_column("", width=22)
+    table.add_column("kWh", justify="right", width=6)
+    table.add_column("Cost", justify="right", width=7)
+    table.add_column("", width=12)
+
+    for h in profile:
+        label = _HOUR_LABELS[h.hour]
+        bar = _bar(h.avg_usage, max_usage, width=22)
+
+        if h.period == TouPeriod.PEAK:
+            bar_str = f"[red]{bar}[/red]"
+            marker = "[red bold]◀ PEAK[/red bold]"
+            style = ""
+        elif h.period == TouPeriod.PART_PEAK:
+            bar_str = f"[yellow]{bar}[/yellow]"
+            marker = "[yellow]◀ PART-PK[/yellow]"
+            style = ""
+        else:
+            bar_str = f"[green]{bar}[/green]"
+            marker = ""
+            style = "dim" if h.avg_usage < max_usage * 0.4 else ""
+
+        cost_str = f"${h.est_cost_per_hour:.2f}" if h.count > 0 else "—"
+
+        table.add_row(
+            label,
+            bar_str,
+            f"{h.avg_usage:.2f}",
+            cost_str,
+            marker,
+            style=style,
+        )
+
+    # Summary row
+    peak_total = sum(h.avg_usage for h in profile if h.period == TouPeriod.PEAK)
+    pp_total = sum(h.avg_usage for h in profile if h.period == TouPeriod.PART_PEAK)
+    off_total = sum(h.avg_usage for h in profile if h.period == TouPeriod.OFF_PEAK)
+    peak_cost = sum(h.est_cost_per_hour for h in profile if h.period == TouPeriod.PEAK)
+    pp_cost = sum(h.est_cost_per_hour for h in profile if h.period == TouPeriod.PART_PEAK)
+    off_cost = sum(h.est_cost_per_hour for h in profile if h.period == TouPeriod.OFF_PEAK)
+    daily_total = peak_total + pp_total + off_total
+
+    console.print(table)
+    console.print("")
+
+    peak_pct = peak_total / daily_total * 100 if daily_total > 0 else 0
+    lines = [
+        f"[red]Peak (4-9pm):[/red]       {peak_total:5.1f} kWh/day  ${peak_cost:.2f}  ({peak_pct:.0f}%)",
+    ]
+    if pp_total > 0:
+        pp_pct = pp_total / daily_total * 100
+        lines.append(
+            f"[yellow]Part-peak:[/yellow]        {pp_total:5.1f} kWh/day  ${pp_cost:.2f}  ({pp_pct:.0f}%)"
+        )
+    off_pct = off_total / daily_total * 100 if daily_total > 0 else 0
+    lines.append(
+        f"[green]Off-peak:[/green]         {off_total:5.1f} kWh/day  ${off_cost:.2f}  ({off_pct:.0f}%)"
+    )
+    lines.append(f"[bold]Total:[/bold]             {daily_total:5.1f} kWh/day  ${peak_cost + pp_cost + off_cost:.2f}")
+
+    console.print(Panel("\n".join(lines), title="Daily Breakdown", border_style="cyan"))
+
+
+def print_weekly_heatmap(
+    heatmap: list[list[float]],
+    rate_plan: RatePlan,
+    console: Console | None = None,
+) -> None:
+    """Render a 7×24 heatmap grid using intensity shading."""
+    if console is None:
+        console = Console()
+
+    # Intensity thresholds based on data range
+    all_vals = [v for row in heatmap for v in row if v > 0]
+    if not all_vals:
+        console.print("[dim]No data for heatmap.[/dim]")
+        return
+
+    p25 = sorted(all_vals)[len(all_vals) // 4]
+    p50 = sorted(all_vals)[len(all_vals) // 2]
+    p75 = sorted(all_vals)[len(all_vals) * 3 // 4]
+
+    def _shade(val: float) -> str:
+        if val == 0:
+            return "  "
+        elif val <= p25:
+            return "░░"
+        elif val <= p50:
+            return "▒▒"
+        elif val <= p75:
+            return "▓▓"
+        else:
+            return "██"
+
+    def _color_shade(val: float, hour: int) -> str:
+        shade = _shade(val)
+        period = rate_plan.classify_hour(hour)
+        if period == TouPeriod.PEAK:
+            return f"[red]{shade}[/red]"
+        elif period == TouPeriod.PART_PEAK:
+            return f"[yellow]{shade}[/yellow]"
+        return shade
+
+    dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    table = Table(
+        title="Weekly Usage Heatmap (kWh/hr)",
+        show_lines=False, padding=(0, 0),
+    )
+    table.add_column("Hour", width=5, style="dim")
+    for d in dow_labels:
+        table.add_column(d, width=4, justify="center")
+    table.add_column("", width=10)
+
+    ps, pe = rate_plan.peak_hours
+    pp_ranges = rate_plan.part_peak_hours
+
+    for hour in range(24):
+        vals = [heatmap[dow][hour] for dow in range(7)]
+        shaded = [_color_shade(v, hour) for v in vals]
+
+        # Period marker
+        is_peak = ps <= hour < pe
+        is_pp = any(s <= hour < e for s, e in pp_ranges)
+        if is_peak:
+            marker = "[red bold]◀ PEAK[/red bold]"
+        elif is_pp:
+            marker = "[yellow]◀ PART[/yellow]"
+        else:
+            marker = ""
+
+        table.add_row(_HOUR_LABELS[hour], *shaded, marker)
+
+    console.print(table)
+    console.print(
+        f"  Legend: [dim]░░[/dim] <{p25:.1f}  ▒▒ {p25:.1f}-{p50:.1f}"
+        f"  ▓▓ {p50:.1f}-{p75:.1f}  ██ >{p75:.1f} kWh"
+    )
+
+
+def print_peak_day_drilldown(
+    days: list[PeakDayDetail],
+    avg_profile: list[HourOfDayStats],
+    console: Console | None = None,
+) -> None:
+    """Render hour-by-hour detail panels for worst peak days."""
+    if console is None:
+        console = Console()
+
+    if not days:
+        console.print("[dim]No peak days to display.[/dim]")
+        return
+
+    # Build avg lookup for comparison
+    avg_by_hour = {h.hour: h.avg_usage for h in avg_profile}
+
+    for rank, day in enumerate(days, 1):
+        max_hourly = max(u for _, u in day.hourly) if day.hourly else 1.0
+
+        lines: list[str] = []
+        for hour, kwh in day.hourly:
+            bar = _bar(kwh, max_hourly, width=18)
+            avg = avg_by_hour.get(hour, 0)
+
+            # Flag if significantly above average
+            if avg > 0 and kwh > avg * 2:
+                flag = f"  [red bold]← {kwh / avg:.0f}× avg[/red bold]"
+            elif avg > 0 and kwh > avg * 1.5:
+                flag = f"  [yellow]← {kwh / avg:.1f}× avg[/yellow]"
+            else:
+                flag = ""
+
+            period_marker = ""
+            if 16 <= hour < 21:
+                period_marker = "[red]█[/red]"
+            elif hour in (15, 21, 22, 23):
+                period_marker = "[yellow]▪[/yellow]"
+
+            lines.append(
+                f"  {_HOUR_LABELS[hour]}  {period_marker} [red]{bar}[/red]"
+                f"  {kwh:5.1f} kWh{flag}"
+            )
+
+        lines.append("")
+        lines.append(
+            f"  Peak cost est: [bold]${day.est_peak_cost:.2f}[/bold]"
+            f"  │  Daily total: {day.daily_total:.1f} kWh"
+        )
+
+        title = (
+            f"#{rank}  {day.day.strftime('%b %d')} ({day.day.strftime('%a')})"
+            f" — {day.peak_total:.1f} kWh peak"
+        )
+        console.print(Panel(
+            "\n".join(lines),
+            title=title,
+            border_style="red",
+        ))
+
+
+def print_shift_recommendations(
+    savings: ShiftSavings,
+    rate_plan: RatePlan,
+    console: Console | None = None,
+) -> None:
+    """Render actionable peak-shift savings summary."""
+    if console is None:
+        console = Console()
+
+    rate_diff_cents = (savings.peak_rate - savings.offpeak_rate) * 100
+
+    lines = [
+        f"[bold]Your peak window (4-9pm weekdays):[/bold]",
+        f"  Avg daily peak usage:   {savings.avg_daily_peak_kwh:.1f} kWh",
+        f"  Avg daily peak cost:    ${savings.avg_daily_peak_cost:.2f}",
+        f"  Monthly peak cost:      [bold]${savings.monthly_peak_cost:.0f}[/bold]",
+        "",
+        f"[bold]Rate plan:[/bold] {rate_plan.name}",
+        f"  Peak rate:     ${savings.peak_rate:.2f}/kWh",
+        f"  Off-peak rate: ${savings.offpeak_rate:.2f}/kWh",
+        f"  Difference:    [bold]${savings.peak_rate - savings.offpeak_rate:.2f}/kWh"
+        f" ({rate_diff_cents:.0f}¢)[/bold]",
+        "",
+        "[bold]Heaviest peak hours:[/bold]",
+    ]
+
+    for hour, kwh in savings.heaviest_hours:
+        lines.append(f"  {_HOUR_LABELS[hour]}:  {kwh:.1f} kWh avg")
+
+    lines.extend([
+        "",
+        "[bold]What you can shift to off-peak (before 3pm or after midnight):[/bold]",
+        "  • EV charging → schedule to start at 12am",
+        "  • Laundry & dishwasher → run before 3pm or after midnight",
+        "  • Pre-heat/cool house by 3:30pm, coast through peak",
+        "  • Pool pump → schedule for morning hours",
+        "",
+    ])
+
+    if savings.est_monthly_savings_high > 1:
+        lines.append(
+            f"[bold green]Estimated monthly savings: "
+            f"${savings.est_monthly_savings_low:.0f}–${savings.est_monthly_savings_high:.0f}[/bold green]"
+        )
+        annual_low = savings.est_monthly_savings_low * 12
+        annual_high = savings.est_monthly_savings_high * 12
+        lines.append(
+            f"[green]Annual potential: ${annual_low:.0f}–${annual_high:.0f}[/green]"
+        )
+    else:
+        lines.append(
+            "[green]Your peak usage is already low — nice work![/green]"
+        )
+
+    console.print(Panel(
+        "\n".join(lines),
+        title="Peak Shift Opportunities",
+        border_style="bright_cyan",
+    ))

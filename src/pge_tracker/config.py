@@ -27,6 +27,7 @@ class Config:
     peak_hours_end: int
     default_meter: str  # "electric" | "gas" | "both"
     initial_fetch_days: int
+    rate_plan: str  # "EV2-A" | "E-TOU-C"
 
 
 _SEARCH_PATHS = [
@@ -98,4 +99,5 @@ def load_config(path: Path | None = None) -> Config:
         peak_hours_end=int(prefs.get("peak_hours_end", 21)),
         default_meter=prefs.get("default_meter", "both"),
         initial_fetch_days=int(prefs.get("initial_fetch_days", 365)),
+        rate_plan=prefs.get("rate_plan", "EV2-A"),
     )

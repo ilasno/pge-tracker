@@ -467,6 +467,82 @@ def db(
 
 
 @app.command()
+def peak(
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+    days: int = typer.Option(30, "--days", "-d", help="Days of data to analyze"),
+    weekdays_only: bool = typer.Option(False, "--weekdays-only", "-w",
+                                        help="Only analyze weekday usage"),
+) -> None:
+    """Analyze peak-hour usage patterns and savings opportunities."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from . import analyzer
+    from . import presenter
+    from .models import RATE_PLANS
+
+    config = _get_config(config_path)
+    db = _get_db(config)
+
+    try:
+        accounts = db.get_accounts()
+        if not accounts:
+            console.print("[yellow]No data yet. Run 'pge-tracker sync' first.[/yellow]")
+            return
+
+        tz = ZoneInfo(config.timezone)
+        now = datetime.now(tz)
+        start = now - timedelta(days=days)
+
+        rate_plan = RATE_PLANS.get(config.rate_plan)
+        if rate_plan is None:
+            console.print(f"[red]Unknown rate plan: {config.rate_plan}. "
+                          f"Available: {', '.join(RATE_PLANS.keys())}[/red]")
+            raise typer.Exit(1)
+
+        # Only electric accounts have TOU
+        electric_accounts = [a for a in accounts if a.meter_type == MeterType.ELECTRIC]
+        if not electric_accounts:
+            console.print("[yellow]No electric accounts found.[/yellow]")
+            return
+
+        for acct in electric_accounts:
+            hourly = db.get_usage_reads(acct.id, Resolution.HOUR, start, now)
+            if not hourly:
+                continue
+
+            label = f"ELECTRIC ({acct.account_number or acct.id})"
+            console.print(f"\n[bold cyan]{'=' * 60}[/bold cyan]")
+            console.print(f"[bold cyan]  {label} — {rate_plan.name} Rate Plan[/bold cyan]")
+            console.print(f"[bold cyan]  Analyzing {days} days ({start.date()} to {now.date()})[/bold cyan]")
+            console.print(f"[bold cyan]{'=' * 60}[/bold cyan]\n")
+
+            # View 1: Hour-of-Day Profile
+            profile = analyzer.hourly_profile(
+                hourly, rate_plan, tz, weekdays_only=weekdays_only,
+            )
+            presenter.print_hourly_profile(profile, console)
+
+            # View 2: Weekly Heatmap
+            console.print("")
+            heatmap = analyzer.weekly_heatmap(hourly, tz)
+            presenter.print_weekly_heatmap(heatmap, rate_plan, console)
+
+            # View 3: Peak Day Drill-Down
+            console.print("")
+            worst_days = analyzer.peak_day_drilldown(hourly, rate_plan, tz, top_n=5)
+            presenter.print_peak_day_drilldown(worst_days, profile, console)
+
+            # View 4: Shift Savings Estimate
+            console.print("")
+            savings = analyzer.shift_savings_estimate(profile, rate_plan, num_days=30)
+            presenter.print_shift_recommendations(savings, rate_plan, console)
+
+    finally:
+        db.close()
+
+
+@app.command()
 def version() -> None:
     """Show version."""
     console.print(f"pge-tracker {__version__}")

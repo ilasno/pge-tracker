@@ -11,17 +11,23 @@ from pge_tracker.analyzer import (
     detect_anomalies,
     generate_recommendations,
     highest_usage_days,
+    hourly_profile,
+    peak_day_drilldown,
     period_summaries,
     seasonal_patterns,
+    shift_savings_estimate,
     tou_analysis,
+    weekly_heatmap,
     yoy_comparison,
 )
 from pge_tracker.models import (
     CostRecord,
     DailyStats,
     DataSource,
+    EV2A,
     MeterType,
     Resolution,
+    TouPeriod,
     UsageRecord,
 )
 
@@ -291,3 +297,99 @@ class TestRecommendations:
             tou=None, yoy=None, anomalies=[], seasonal=[], daily=ds
         )
         assert len(recs) >= 1
+
+
+class TestHourlyProfile:
+    def test_returns_24_hours(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        assert len(profile) == 24
+        assert profile[0].hour == 0
+        assert profile[23].hour == 23
+
+    def test_peak_hours_marked(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        for h in profile:
+            if 16 <= h.hour < 21:
+                assert h.period == TouPeriod.PEAK
+            elif h.hour == 15 or 21 <= h.hour < 24:
+                assert h.period == TouPeriod.PART_PEAK
+            else:
+                assert h.period == TouPeriod.OFF_PEAK
+
+    def test_peak_hours_have_higher_usage(self, sample_hourly_usage):
+        """Fixture has 1.2 base in peak vs 0.5 midday — peak should be higher."""
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        peak_avg = sum(h.avg_usage for h in profile if h.period == TouPeriod.PEAK) / 5
+        midday_avg = sum(h.avg_usage for h in profile if 10 <= h.hour < 15) / 5
+        assert peak_avg > midday_avg
+
+    def test_cost_estimates_positive(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        for h in profile:
+            if h.count > 0:
+                assert h.est_cost_per_hour > 0
+
+    def test_weekdays_only_filter(self, sample_hourly_usage):
+        all_days = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        weekdays = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC, weekdays_only=True)
+        # Weekday-only should have fewer data points
+        assert weekdays[0].count < all_days[0].count
+
+
+class TestWeeklyHeatmap:
+    def test_returns_7x24_matrix(self, sample_hourly_usage):
+        hm = weekly_heatmap(sample_hourly_usage, tz=PACIFIC)
+        assert len(hm) == 7
+        for row in hm:
+            assert len(row) == 24
+
+    def test_values_nonnegative(self, sample_hourly_usage):
+        hm = weekly_heatmap(sample_hourly_usage, tz=PACIFIC)
+        for row in hm:
+            for val in row:
+                assert val >= 0
+
+
+class TestPeakDayDrilldown:
+    def test_returns_top_n(self, sample_hourly_usage):
+        days = peak_day_drilldown(sample_hourly_usage, EV2A, tz=PACIFIC, top_n=3)
+        assert len(days) <= 3
+
+    def test_sorted_by_peak_usage(self, sample_hourly_usage):
+        days = peak_day_drilldown(sample_hourly_usage, EV2A, tz=PACIFIC, top_n=5)
+        if len(days) >= 2:
+            assert days[0].peak_total >= days[1].peak_total
+
+    def test_hourly_detail_within_peak_window(self, sample_hourly_usage):
+        days = peak_day_drilldown(sample_hourly_usage, EV2A, tz=PACIFIC, top_n=1)
+        if days:
+            for hour, kwh in days[0].hourly:
+                # Should include peak (16-21) and part-peak (15, 21-23) hours
+                assert 15 <= hour <= 23
+
+    def test_excludes_weekends(self, sample_hourly_usage):
+        days = peak_day_drilldown(sample_hourly_usage, EV2A, tz=PACIFIC, top_n=10)
+        for d in days:
+            assert d.day.weekday() < 5  # No weekends
+
+
+class TestShiftSavings:
+    def test_positive_savings(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        savings = shift_savings_estimate(profile, EV2A, num_days=30)
+        assert savings.avg_daily_peak_kwh > 0
+        assert savings.monthly_peak_cost > 0
+        assert savings.est_monthly_savings_high >= savings.est_monthly_savings_low
+        assert savings.est_monthly_savings_low >= 0
+
+    def test_heaviest_hours_in_peak(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        savings = shift_savings_estimate(profile, EV2A)
+        for hour, kwh in savings.heaviest_hours:
+            assert 16 <= hour < 21
+
+    def test_rates_match_plan(self, sample_hourly_usage):
+        profile = hourly_profile(sample_hourly_usage, EV2A, tz=PACIFIC)
+        savings = shift_savings_estimate(profile, EV2A)
+        assert savings.peak_rate == EV2A.winter_peak
+        assert savings.offpeak_rate == EV2A.winter_off_peak

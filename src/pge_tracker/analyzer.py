@@ -16,10 +16,15 @@ from .models import (
     AnomalyResult,
     CostRecord,
     DailyStats,
+    HourOfDayStats,
+    PeakDayDetail,
     PeriodSummary,
+    RatePlan,
     Resolution,
     SeasonalPattern,
+    ShiftSavings,
     TouAnalysis,
+    TouPeriod,
     UsageRecord,
     YoyComparison,
 )
@@ -527,6 +532,189 @@ def generate_recommendations(
         )
 
     return recs
+
+
+# --- Peak analysis ---
+
+
+def hourly_profile(
+    hourly_reads: list[UsageRecord],
+    rate_plan: RatePlan,
+    tz: ZoneInfo | None = None,
+    weekdays_only: bool = False,
+) -> list[HourOfDayStats]:
+    """Compute average usage for each hour of the day (0-23).
+
+    Returns 24 HourOfDayStats sorted by hour, with cost estimates
+    computed from the rate plan.
+    """
+    if tz is None:
+        tz = ZoneInfo("America/Los_Angeles")
+
+    # Bucket usage by hour of day
+    by_hour: dict[int, list[tuple[float, int]]] = defaultdict(list)
+    for r in hourly_reads:
+        lt = r.start_time.astimezone(tz) if r.start_time.tzinfo else r.start_time
+        if weekdays_only and lt.weekday() >= 5:
+            continue
+        by_hour[lt.hour].append((r.usage, lt.month))
+
+    results: list[HourOfDayStats] = []
+    for hour in range(24):
+        entries = by_hour.get(hour, [])
+        if not entries:
+            period = rate_plan.classify_hour(hour)
+            results.append(HourOfDayStats(
+                hour=hour, avg_usage=0.0, max_usage=0.0, count=0,
+                period=period, est_cost_per_hour=0.0,
+            ))
+            continue
+
+        usages = [u for u, _ in entries]
+        avg_u = mean(usages)
+        max_u = max(usages)
+        period = rate_plan.classify_hour(hour)
+
+        # Weighted average rate across all months for this hour
+        total_cost = sum(rate_plan.rate_for(m, hour) * u for u, m in entries)
+        avg_cost = total_cost / len(entries)
+
+        results.append(HourOfDayStats(
+            hour=hour,
+            avg_usage=round(avg_u, 3),
+            max_usage=round(max_u, 2),
+            count=len(entries),
+            period=period,
+            est_cost_per_hour=round(avg_cost, 4),
+        ))
+
+    return results
+
+
+def weekly_heatmap(
+    hourly_reads: list[UsageRecord],
+    tz: ZoneInfo | None = None,
+) -> list[list[float]]:
+    """Build a 7×24 matrix of average usage (day-of-week × hour-of-day).
+
+    Returns a list of 7 lists (Mon=0 through Sun=6), each with 24 floats.
+    """
+    if tz is None:
+        tz = ZoneInfo("America/Los_Angeles")
+
+    # accumulator: [dow][hour] -> list of usage values
+    acc: dict[int, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for r in hourly_reads:
+        lt = r.start_time.astimezone(tz) if r.start_time.tzinfo else r.start_time
+        acc[lt.weekday()][lt.hour].append(r.usage)
+
+    matrix: list[list[float]] = []
+    for dow in range(7):
+        row: list[float] = []
+        for hour in range(24):
+            vals = acc[dow][hour]
+            row.append(round(mean(vals), 2) if vals else 0.0)
+        matrix.append(row)
+    return matrix
+
+
+def peak_day_drilldown(
+    hourly_reads: list[UsageRecord],
+    rate_plan: RatePlan,
+    tz: ZoneInfo | None = None,
+    top_n: int = 5,
+) -> list[PeakDayDetail]:
+    """Find the N days with highest peak-window usage and return hour-by-hour detail."""
+    if tz is None:
+        tz = ZoneInfo("America/Los_Angeles")
+
+    ps, pe = rate_plan.peak_hours
+
+    # Group reads by date
+    by_day: dict[date, list[tuple[int, float, int]]] = defaultdict(list)
+    for r in hourly_reads:
+        lt = r.start_time.astimezone(tz) if r.start_time.tzinfo else r.start_time
+        by_day[lt.date()].append((lt.hour, r.usage, lt.month))
+
+    # Calculate peak total per day (weekdays only — TOU peak only on weekdays)
+    day_peak: list[tuple[date, float]] = []
+    for d, hours in by_day.items():
+        if d.weekday() >= 5:
+            continue
+        peak_kwh = sum(u for h, u, _ in hours if ps <= h < pe)
+        if peak_kwh > 0:
+            day_peak.append((d, peak_kwh))
+
+    day_peak.sort(key=lambda x: x[1], reverse=True)
+
+    results: list[PeakDayDetail] = []
+    for d, peak_total in day_peak[:top_n]:
+        hours = by_day[d]
+        daily_total = sum(u for _, u, _ in hours)
+
+        # Include peak + part-peak hours for context
+        pp_ranges = rate_plan.part_peak_hours
+        detail_hours: list[tuple[int, float]] = []
+        est_cost = 0.0
+        for h, u, m in sorted(hours, key=lambda x: x[0]):
+            is_peak_or_pp = (ps <= h < pe) or any(s <= h < e for s, e in pp_ranges)
+            if is_peak_or_pp:
+                detail_hours.append((h, round(u, 2)))
+                est_cost += u * rate_plan.rate_for(m, h)
+
+        results.append(PeakDayDetail(
+            day=d,
+            peak_total=round(peak_total, 2),
+            daily_total=round(daily_total, 2),
+            hourly=detail_hours,
+            est_peak_cost=round(est_cost, 2),
+        ))
+
+    return results
+
+
+def shift_savings_estimate(
+    profile: list[HourOfDayStats],
+    rate_plan: RatePlan,
+    num_days: int = 30,
+) -> ShiftSavings:
+    """Estimate monthly savings from shifting peak usage to off-peak.
+
+    Assumes a portion of peak-hour usage could be moved to off-peak hours.
+    """
+    peak_hours = [h for h in profile if h.period == TouPeriod.PEAK]
+    offpeak_hours = [h for h in profile if h.period == TouPeriod.OFF_PEAK]
+
+    daily_peak_kwh = sum(h.avg_usage for h in peak_hours)
+    daily_peak_cost = sum(h.est_cost_per_hour for h in peak_hours)
+
+    # Use winter rates as baseline (since we're currently in winter)
+    peak_rate = rate_plan.winter_peak
+    offpeak_rate = rate_plan.winter_off_peak
+    rate_diff = peak_rate - offpeak_rate
+
+    monthly_peak_cost = daily_peak_cost * num_days
+
+    # Sort peak hours by avg usage descending to find heaviest
+    heaviest = sorted(peak_hours, key=lambda h: h.avg_usage, reverse=True)[:3]
+    heaviest_hours = [(h.hour, round(h.avg_usage, 2)) for h in heaviest]
+
+    # Conservative estimate: shift 25-40% of peak usage
+    shiftable_low = daily_peak_kwh * 0.25
+    shiftable_high = daily_peak_kwh * 0.40
+    savings_low = shiftable_low * rate_diff * num_days
+    savings_high = shiftable_high * rate_diff * num_days
+
+    return ShiftSavings(
+        avg_daily_peak_kwh=round(daily_peak_kwh, 2),
+        avg_daily_peak_cost=round(daily_peak_cost, 2),
+        monthly_peak_cost=round(monthly_peak_cost, 2),
+        heaviest_hours=heaviest_hours,
+        est_monthly_savings_low=round(max(0.0, savings_low), 2),
+        est_monthly_savings_high=round(max(0.0, savings_high), 2),
+        peak_rate=peak_rate,
+        offpeak_rate=offpeak_rate,
+    )
 
 
 # --- Helpers ---

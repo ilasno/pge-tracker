@@ -10,10 +10,12 @@ path = "data/pge_tracker.db"
 
 [preferences]
 timezone = "America/Los_Angeles"
-# PG&E E-TOU-C peak hours: weekdays 4pm-9pm Pacific
+# PG&E peak hours: weekdays 4pm-9pm Pacific
 peak_hours_start = 16
 peak_hours_end = 21
 # "electric" | "gas" | "both"
 default_meter = "both"
 # Days of history to fetch on first sync (max 1095 = 3 years)
 initial_fetch_days = 365
+# Rate plan: "EV2-A" (Home Charging) or "E-TOU-C" (standard TOU)
+rate_plan = "EV2-A"
