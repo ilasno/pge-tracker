@@ -1,28 +1,34 @@
-"""Green Button CSV parser for PG&E data downloads."""
+"""PG&E CSV parser for usage data downloads.
+
+Supports the PG&E interval data export format with columns:
+    TYPE, DATE, START TIME, END TIME, USAGE (kWh), COST, NOTES
+    TYPE, DATE, START TIME, END TIME, USAGE (therms), COST, NOTES
+as well as the legacy Green Button format with columns:
+    TYPE, DATE, START TIME, END TIME, USAGE, UNITS, COST, NOTES
+"""
 
 from __future__ import annotations
 
 import csv
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .models import DataSource, MeterType, Resolution, UsageRecord
+from .models import CostRecord, DataSource, MeterType, Resolution, UsageRecord
 
 logger = logging.getLogger(__name__)
 
 _PACIFIC = ZoneInfo("America/Los_Angeles")
 
-# PG&E Green Button CSV has this header row (after possible metadata lines):
-# TYPE,DATE,START TIME,END TIME,USAGE,UNITS,COST,NOTES
-# or sometimes:
-# TYPE,DATE,START TIME,END TIME,USAGE,UNITS,NOTES
-_EXPECTED_COLUMNS = {"TYPE", "DATE", "START TIME", "USAGE", "UNITS"}
+# Minimum columns required in the header (case-insensitive match).
+# We accept both "USAGE" and "USAGE (kWh)" / "USAGE (therms)" style headers.
+_REQUIRED_COLUMNS = {"TYPE", "DATE", "START TIME"}
 
 
 def detect_green_button_format(file_path: Path) -> dict:
-    """Read the first rows of a Green Button CSV to determine its format.
+    """Read the first rows of a PG&E CSV to determine its format.
 
     Returns a dict with:
         meter_type: "electric" or "gas"
@@ -30,14 +36,17 @@ def detect_green_button_format(file_path: Path) -> dict:
         date_range: (earliest_date_str, latest_date_str)
         row_count: estimated number of data rows
         columns: list of column headers found
+        account_number: account number from metadata, if present
+        service_address: address from metadata, if present
     """
+    metadata = _extract_metadata(file_path)
+
     with open(file_path, newline="", encoding="utf-8-sig") as f:
-        # Skip any metadata lines before the header
         header_line, reader = _find_header(f)
         if header_line is None:
             raise ValueError(
                 f"Could not find a valid CSV header in {file_path}. "
-                f"Expected columns: {_EXPECTED_COLUMNS}"
+                f"Expected columns containing at least: {_REQUIRED_COLUMNS}"
             )
 
         meter_type = None
@@ -70,7 +79,7 @@ def detect_green_button_format(file_path: Path) -> dict:
                 except ValueError:
                     pass
 
-        resolution = "hourly" if 60 in durations else "daily"
+        resolution = "hourly" if durations and max(durations) < 120 else "daily"
 
     return {
         "meter_type": meter_type or "unknown",
@@ -78,6 +87,7 @@ def detect_green_button_format(file_path: Path) -> dict:
         "date_range": (min(dates), max(dates)) if dates else (None, None),
         "row_count": row_count,
         "columns": header_line,
+        **metadata,
     }
 
 
@@ -86,7 +96,7 @@ def parse_green_button_csv(
     meter_type: MeterType,
     account_id: str,
 ) -> list[UsageRecord]:
-    """Parse a PG&E Green Button CSV into UsageRecord objects.
+    """Parse a PG&E CSV into UsageRecord objects.
 
     Args:
         file_path: Path to the CSV file.
@@ -99,20 +109,21 @@ def parse_green_button_csv(
     records: list[UsageRecord] = []
     skipped = 0
 
-    unit = "KWH" if meter_type == MeterType.ELECTRIC else "CCF"
+    unit = "KWH" if meter_type == MeterType.ELECTRIC else "THERM"
 
     with open(file_path, newline="", encoding="utf-8-sig") as f:
-        _header, reader = _find_header(f)
+        header, reader = _find_header(f)
         if reader is None:
             raise ValueError(f"Could not find a valid CSV header in {file_path}")
+
+        usage_col = _find_usage_column(header)
 
         for row_num, row in enumerate(reader, start=2):
             try:
                 date_str = row["DATE"].strip()
                 start_str = row["START TIME"].strip()
                 end_str = row.get("END TIME", "").strip()
-                usage_str = row["USAGE"].strip()
-                units = row.get("UNITS", "").strip().upper()
+                usage_str = row.get(usage_col, "").strip()
 
                 if not date_str or not usage_str:
                     skipped += 1
@@ -120,7 +131,8 @@ def parse_green_button_csv(
 
                 usage_val = float(usage_str)
 
-                # Override unit if CSV specifies it
+                # Check for a separate UNITS column (legacy format)
+                units = row.get("UNITS", "").strip().upper()
                 if units in ("KWH", "THERM", "CCF"):
                     unit = units
                 elif units == "KW":
@@ -171,27 +183,136 @@ def parse_green_button_csv(
     return records
 
 
+def parse_cost_records(
+    file_path: Path,
+    meter_type: MeterType,
+    account_id: str,
+) -> list[CostRecord]:
+    """Parse cost data from a PG&E CSV.
+
+    Returns CostRecord objects for rows that contain a COST column.
+    Returns an empty list if no cost data is present.
+    """
+    records: list[CostRecord] = []
+
+    with open(file_path, newline="", encoding="utf-8-sig") as f:
+        header, reader = _find_header(f)
+        if reader is None:
+            return []
+
+        cost_col = _find_cost_column(header)
+        if cost_col is None:
+            return []
+
+        usage_col = _find_usage_column(header)
+
+        for row_num, row in enumerate(reader, start=2):
+            try:
+                date_str = row["DATE"].strip()
+                start_str = row["START TIME"].strip()
+                end_str = row.get("END TIME", "").strip()
+                cost_str = row.get(cost_col, "").strip()
+                usage_str = row.get(usage_col, "").strip()
+
+                if not date_str or not cost_str:
+                    continue
+
+                # Strip dollar signs and parse
+                cost_val = float(cost_str.replace("$", "").replace(",", ""))
+                usage_val = float(usage_str) if usage_str else None
+
+                start_dt = _parse_datetime(date_str, start_str)
+
+                if end_str:
+                    end_dt = _parse_datetime(date_str, end_str)
+                    if end_dt <= start_dt:
+                        end_dt += timedelta(days=1)
+                else:
+                    end_dt = start_dt + timedelta(days=1)
+
+                duration_hours = (end_dt - start_dt).total_seconds() / 3600
+                resolution = Resolution.HOUR if duration_hours <= 1.5 else Resolution.DAY
+
+                records.append(
+                    CostRecord(
+                        account_id=account_id,
+                        start_time=start_dt,
+                        end_time=end_dt,
+                        usage=usage_val,
+                        cost=cost_val,
+                        resolution=resolution,
+                        source=DataSource.GREEN_BUTTON,
+                    )
+                )
+            except (KeyError, ValueError) as e:
+                logger.warning("Skipping cost row %d: %s", row_num, e)
+
+    return records
+
+
+# --- Internal helpers ---
+
+
+def _extract_metadata(file_path: Path) -> dict:
+    """Extract account metadata from the header lines of a PG&E CSV."""
+    metadata: dict = {}
+    with open(file_path, newline="", encoding="utf-8-sig") as f:
+        for _ in range(10):  # Only check the first 10 lines
+            line = f.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line.upper().startswith("ACCOUNT NUMBER,"):
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    metadata["account_number"] = parts[1].strip()
+            elif line.upper().startswith("ADDRESS,"):
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    metadata["service_address"] = parts[1].strip().strip('"')
+    return metadata
+
+
 def _find_header(
     f,
 ) -> tuple[list[str] | None, csv.DictReader | None]:
-    """Scan for the header row in a Green Button CSV.
+    """Scan for the header row in a PG&E CSV.
 
-    PG&E CSVs sometimes have metadata lines before the actual header.
-    We look for a line containing the expected column names.
+    PG&E CSVs have metadata lines (Name, Address, Account Number)
+    before the actual column header. We look for a line containing
+    the required column names.
     """
     for line in f:
         line = line.strip()
         if not line:
             continue
-        # Check if this line looks like a header
-        parts = [p.strip().upper() for p in line.split(",")]
-        if _EXPECTED_COLUMNS.issubset(set(parts)):
-            # Re-create a DictReader using the remaining lines
-            # with this line's fields as the header
-            header = [p.strip() for p in line.split(",")]
-            reader = csv.DictReader(f, fieldnames=header)
-            return header, reader
+        # Normalise column names for comparison
+        parts = [p.strip() for p in line.split(",")]
+        upper_parts = {p.upper() for p in parts}
+        if _REQUIRED_COLUMNS.issubset(upper_parts):
+            # Use the original-cased parts as the fieldnames
+            reader = csv.DictReader(f, fieldnames=parts)
+            return parts, reader
     return None, None
+
+
+def _find_usage_column(header: list[str]) -> str:
+    """Find the usage column in the header.
+
+    Handles both "USAGE" and "USAGE (kWh)" / "USAGE (therms)" formats.
+    """
+    for col in header:
+        if col.upper().startswith("USAGE"):
+            return col
+    return "USAGE"
+
+
+def _find_cost_column(header: list[str]) -> str | None:
+    """Find the cost column in the header, if present."""
+    for col in header:
+        if col.upper() == "COST":
+            return col
+    return None
 
 
 def _parse_datetime(date_str: str, time_str: str) -> datetime:

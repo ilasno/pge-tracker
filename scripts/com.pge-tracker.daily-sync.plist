@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Change this label if you rename or move the project -->
+    <key>Label</key>
+    <string>com.pge-tracker.daily-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- UPDATE this path to match your project location -->
+        <string>/Users/ilasno/_Working/HomeDev/pge-tracker/scripts/daily-sync.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker</string>
+
+    <!-- Run daily at 6:00 AM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Also run if the scheduled time was missed (e.g., laptop was asleep) -->
+    <key>StartInterval</key>
+    <integer>86400</integer>
+
+    <!-- Redirect stdout/stderr to log files -->
+    <key>StandardOutPath</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/launchd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/launchd-stderr.log</string>
+
+    <!-- Include PATH so it can find the venv python -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>

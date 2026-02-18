@@ -469,16 +469,19 @@ def print_import_summary(
     record_count: int,
     meter_type: str,
     date_range: tuple | None,
+    cost_count: int = 0,
     console: Console | None = None,
 ) -> None:
     if console is None:
         console = Console()
 
     lines = [
-        f"File: {file_path}",
+        f"File: {file_path.name}",
         f"Type: {meter_type}",
-        f"Records imported: {record_count}",
+        f"Usage records imported: {record_count:,}",
     ]
+    if cost_count:
+        lines.append(f"Cost records imported:  {cost_count:,}")
     if date_range and date_range[0]:
         lines.append(f"Date range: {date_range[0]} to {date_range[1]}")
 

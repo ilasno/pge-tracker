@@ -9,6 +9,7 @@ build/
 venv/
 data/pge_tracker.db
 data/.opower_session*
+data/logs/
 config.toml
 .pytest_cache/
 .coverage

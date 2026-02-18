@@ -91,8 +91,8 @@ def import_csv(
                                    help="Account ID (auto-generated if empty)"),
     preview: bool = typer.Option(False, "--preview", help="Preview without importing"),
 ) -> None:
-    """Import a Green Button CSV file from PG&E."""
-    from .importer import detect_green_button_format, parse_green_button_csv
+    """Import a PG&E CSV file (Green Button or interval data export)."""
+    from .importer import detect_green_button_format, parse_cost_records, parse_green_button_csv
     from .presenter import print_import_summary
 
     if not file.exists():
@@ -106,6 +106,8 @@ def import_csv(
                   f"{info['row_count']} rows")
     if info["date_range"][0]:
         console.print(f"Date range: {info['date_range'][0]} to {info['date_range'][1]}")
+    if info.get("account_number"):
+        console.print(f"Account: {info['account_number']}")
 
     if preview:
         return
@@ -141,19 +143,24 @@ def import_csv(
             utility="pge",
             meter_type=mt,
             customer_id=None,
-            account_number=None,
-            service_address=None,
+            account_number=info.get("account_number"),
+            service_address=info.get("service_address"),
             source=DataSource.GREEN_BUTTON,
         ))
 
         records = parse_green_button_csv(file, mt, account_id)
-        count = db.upsert_usage_reads(records)
+        usage_count = db.upsert_usage_reads(records)
+
+        # Also import cost data if present
+        cost_records = parse_cost_records(file, mt, account_id)
+        cost_count = db.upsert_cost_reads(cost_records)
 
         print_import_summary(
             file_path=file,
-            record_count=count,
+            record_count=usage_count,
             meter_type=mt.value,
             date_range=info["date_range"],
+            cost_count=cost_count,
             console=console,
         )
     finally:
@@ -222,11 +229,11 @@ def show(
                     console.print(f"[dim]No hourly data for this account.[/dim]")
                     continue
                 # Show as daily chart from hourly data
-                costs = db.get_cost_reads(acct.id, Resolution.DAY, start, now)
+                costs = _get_all_cost_reads(db, acct.id, start, now)
                 ds = daily_stats(usage, costs)
                 print_usage_chart(ds, unit, console)
             elif resolution == "m":
-                costs = db.get_cost_reads(acct.id, Resolution.DAY, start, now)
+                costs = _get_all_cost_reads(db, acct.id, start, now)
                 usage_reads = db.get_usage_reads(acct.id, Resolution.HOUR, start, now)
                 if not costs and not usage_reads:
                     # Try daily usage from cost reads
@@ -236,7 +243,7 @@ def show(
                 print_period_table(summaries, unit, console)
             else:
                 # Daily view
-                costs = db.get_cost_reads(acct.id, Resolution.DAY, start, now)
+                costs = _get_all_cost_reads(db, acct.id, start, now)
                 usage_reads = db.get_usage_reads(acct.id, Resolution.HOUR, start, now)
                 ds = daily_stats(usage_reads if usage_reads else [], costs)
                 if not ds:
@@ -287,8 +294,8 @@ def analyze(
             console.print(f"[bold cyan]  {label}[/bold cyan]")
             console.print(f"[bold cyan]{'=' * 60}[/bold cyan]\n")
 
-            # Load data
-            all_cost = db.get_cost_reads(acct.id, Resolution.DAY)
+            # Load data (combine DAY + HOUR cost reads for full coverage)
+            all_cost = _get_all_cost_reads(db, acct.id)
             hourly = db.get_usage_reads(acct.id, Resolution.HOUR)
             ds = analyzer.daily_stats(hourly if hourly else [], all_cost)
 
@@ -466,6 +473,20 @@ def version() -> None:
 
 
 # --- Helpers ---
+
+
+def _get_all_cost_reads(
+    db: Database,
+    account_id: str,
+    start: "datetime | None" = None,
+    end: "datetime | None" = None,
+) -> list:
+    """Load cost reads at all resolutions (DAY + HOUR) and combine them."""
+    from .models import CostRecord
+
+    daily = db.get_cost_reads(account_id, Resolution.DAY, start, end)
+    hourly = db.get_cost_reads(account_id, Resolution.HOUR, start, end)
+    return daily + hourly
 
 
 def _parse_meter_filter(meter: str) -> set[MeterType] | None:
