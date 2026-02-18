@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pge-tracker.web-dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ilasno/_Working/HomeDev/pge-tracker/.venv/bin/pge-tracker</string>
+        <string>web</string>
+        <string>--port</string>
+        <string>8080</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker</string>
+
+    <!-- Start automatically when loaded (i.e., at login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart automatically if it crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts: wait 10 seconds before restarting -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Redirect stdout/stderr to log files -->
+    <key>StandardOutPath</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/web-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/web-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
