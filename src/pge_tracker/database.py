@@ -155,6 +155,14 @@ class Database:
         ).fetchone()
         return _row_to_account(row) if row else None
 
+    def get_account_ids_by_meter_type(self, meter_type: MeterType) -> list[str]:
+        """Return all account IDs for a given meter type."""
+        rows = self._conn.execute(
+            "SELECT id FROM accounts WHERE meter_type = ?",
+            (meter_type.value,),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
     # --- Usage reads ---
 
     def upsert_usage_reads(self, reads: list[UsageRecord]) -> int:
@@ -221,6 +229,58 @@ class Database:
         if row and row["t"]:
             return datetime.fromisoformat(row["t"])
         return None
+
+    def get_usage_reads_multi(
+        self,
+        account_ids: list[str],
+        resolution: Resolution,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[UsageRecord]:
+        """Get usage reads for multiple accounts combined."""
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        query = (
+            f"SELECT * FROM usage_reads "
+            f"WHERE account_id IN ({placeholders}) AND resolution = ?"
+        )
+        params: list[str] = list(account_ids) + [resolution.value]
+        if start:
+            query += " AND start_time >= ?"
+            params.append(start.isoformat())
+        if end:
+            query += " AND start_time <= ?"
+            params.append(end.isoformat())
+        query += " ORDER BY start_time"
+        rows = self._conn.execute(query, params).fetchall()
+        return [_row_to_usage(r) for r in rows]
+
+    def get_cost_reads_multi(
+        self,
+        account_ids: list[str],
+        resolution: Resolution,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[CostRecord]:
+        """Get cost reads for multiple accounts combined."""
+        if not account_ids:
+            return []
+        placeholders = ",".join("?" for _ in account_ids)
+        query = (
+            f"SELECT * FROM cost_reads "
+            f"WHERE account_id IN ({placeholders}) AND resolution = ?"
+        )
+        params: list[str] = list(account_ids) + [resolution.value]
+        if start:
+            query += " AND start_time >= ?"
+            params.append(start.isoformat())
+        if end:
+            query += " AND start_time <= ?"
+            params.append(end.isoformat())
+        query += " ORDER BY start_time"
+        rows = self._conn.execute(query, params).fetchall()
+        return [_row_to_cost(r) for r in rows]
 
     # --- Cost reads ---
 

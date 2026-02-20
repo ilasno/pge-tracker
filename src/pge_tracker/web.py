@@ -2,12 +2,14 @@
 
 Serves a single-page dashboard with Chart.js visualizations and
 JSON API endpoints backed by the existing analyzer module.
+
+All endpoints accept `meter_type=electric` or `meter_type=gas` to
+automatically combine data from all accounts of that type.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import json
 from datetime import date, datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -18,19 +20,6 @@ from flask import Flask, jsonify, render_template, request
 from .config import Config
 from .database import Database
 from .models import MeterType, RATE_PLANS, Resolution
-
-
-def _json_default(obj: object) -> object:
-    """Custom JSON serializer for dataclasses, dates, and enums."""
-    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return dataclasses.asdict(obj)
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-    if isinstance(obj, Enum):
-        return obj.value
-    if isinstance(obj, Path):
-        return str(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
 def create_app(config: Config) -> Flask:
@@ -45,7 +34,6 @@ def create_app(config: Config) -> Flask:
     )
     app.json.sort_keys = False
 
-    # Store config for use in routes
     app.config["PGE_CONFIG"] = config
 
     def _get_db() -> Database:
@@ -56,6 +44,25 @@ def create_app(config: Config) -> Flask:
     def _tz() -> ZoneInfo:
         return ZoneInfo(config.timezone)
 
+    def _resolve_meter_type(db: Database) -> tuple[MeterType, list[str]] | tuple[None, None]:
+        """Parse meter_type param and return (MeterType, account_ids) or 400."""
+        raw = request.args.get("meter_type", "electric").lower()
+        if raw.startswith("e"):
+            mt = MeterType.ELECTRIC
+        elif raw.startswith("g"):
+            mt = MeterType.GAS
+        else:
+            return None, None
+        account_ids = db.get_account_ids_by_meter_type(mt)
+        return mt, account_ids
+
+    def _get_combined_reads(db, account_ids, start, end):
+        """Fetch and combine hourly usage + all cost reads for multiple accounts."""
+        hourly = db.get_usage_reads_multi(account_ids, Resolution.HOUR, start, end)
+        cost_day = db.get_cost_reads_multi(account_ids, Resolution.DAY, start, end)
+        cost_hour = db.get_cost_reads_multi(account_ids, Resolution.HOUR, start, end)
+        return hourly, cost_day + cost_hour
+
     # --- Dashboard page ---
 
     @app.route("/")
@@ -64,14 +71,13 @@ def create_app(config: Config) -> Flask:
         db = _get_db()
         try:
             accounts = db.get_accounts()
-            electric_accounts = [a for a in accounts if a.meter_type == MeterType.ELECTRIC]
-            gas_accounts = [a for a in accounts if a.meter_type == MeterType.GAS]
+            has_electric = any(a.meter_type == MeterType.ELECTRIC for a in accounts)
+            has_gas = any(a.meter_type == MeterType.GAS for a in accounts)
 
-            # Pass basic info to template
             return render_template(
                 "dashboard.html",
-                electric_accounts=electric_accounts,
-                gas_accounts=gas_accounts,
+                has_electric=has_electric,
+                has_gas=has_gas,
                 rate_plan=config.rate_plan,
                 timezone=config.timezone,
             )
@@ -82,20 +88,37 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/api/accounts")
     def api_accounts():
-        """Return all accounts."""
+        """Return meter types available (grouped)."""
         db = _get_db()
         try:
             accounts = db.get_accounts()
-            return jsonify([
-                {
-                    "id": a.id,
-                    "meter_type": a.meter_type.value,
-                    "account_number": a.account_number,
-                    "service_address": a.service_address,
-                    "source": a.source.value,
-                }
-                for a in accounts
-            ])
+
+            electric = [a for a in accounts if a.meter_type == MeterType.ELECTRIC]
+            gas = [a for a in accounts if a.meter_type == MeterType.GAS]
+
+            result = []
+            if electric:
+                acct_nums = sorted(set(a.account_number for a in electric if a.account_number))
+                addresses = sorted(set(a.service_address for a in electric if a.service_address))
+                result.append({
+                    "meter_type": "electric",
+                    "label": "All Electric",
+                    "account_count": len(electric),
+                    "account_numbers": acct_nums,
+                    "service_address": addresses[0] if addresses else None,
+                })
+            if gas:
+                acct_nums = sorted(set(a.account_number for a in gas if a.account_number))
+                addresses = sorted(set(a.service_address for a in gas if a.service_address))
+                result.append({
+                    "meter_type": "gas",
+                    "label": "All Gas",
+                    "account_count": len(gas),
+                    "account_numbers": acct_nums,
+                    "service_address": addresses[0] if addresses else None,
+                })
+
+            return jsonify(result)
         finally:
             db.close()
 
@@ -104,28 +127,26 @@ def create_app(config: Config) -> Flask:
         """Return daily usage and cost data.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             days: int (default 30)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         days = int(request.args.get("days", 30))
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify([])
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=days)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
-            cost_day = db.get_cost_reads(account_id, Resolution.DAY, start, now)
-            cost_hour = db.get_cost_reads(account_id, Resolution.HOUR, start, now)
-            all_cost = cost_day + cost_hour
-
+            hourly, all_cost = _get_combined_reads(db, account_ids, start, now)
             ds = analyzer.daily_stats(hourly if hourly else [], all_cost)
 
             return jsonify([
@@ -145,18 +166,14 @@ def create_app(config: Config) -> Flask:
         """Return 24-hour average usage profile.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             days: int (default 30)
             weekdays_only: bool (default false)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         days = int(request.args.get("days", 30))
         weekdays_only = request.args.get("weekdays_only", "false").lower() == "true"
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         rate_plan = RATE_PLANS.get(config.rate_plan)
         if not rate_plan:
@@ -164,11 +181,17 @@ def create_app(config: Config) -> Flask:
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify([])
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=days)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
+            hourly = db.get_usage_reads_multi(account_ids, Resolution.HOUR, start, now)
             profile = analyzer.hourly_profile(hourly, rate_plan, tz, weekdays_only)
 
             return jsonify([
@@ -190,24 +213,26 @@ def create_app(config: Config) -> Flask:
         """Return 7x24 weekly heatmap data.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             days: int (default 30)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         days = int(request.args.get("days", 30))
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify({"matrix": [[0]*24]*7, "days": [], "peak_hours": [], "part_peak_hours": []})
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=days)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
+            hourly = db.get_usage_reads_multi(account_ids, Resolution.HOUR, start, now)
             heatmap = analyzer.weekly_heatmap(hourly, tz)
 
             rate_plan = RATE_PLANS.get(config.rate_plan)
@@ -226,18 +251,14 @@ def create_app(config: Config) -> Flask:
         """Return top peak usage days with hourly detail.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             days: int (default 30)
             top_n: int (default 5)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         days = int(request.args.get("days", 30))
         top_n = int(request.args.get("top_n", 5))
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         rate_plan = RATE_PLANS.get(config.rate_plan)
         if not rate_plan:
@@ -245,11 +266,17 @@ def create_app(config: Config) -> Flask:
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify([])
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=days)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
+            hourly = db.get_usage_reads_multi(account_ids, Resolution.HOUR, start, now)
             peak_days = analyzer.peak_day_drilldown(hourly, rate_plan, tz, top_n)
 
             return jsonify([
@@ -271,30 +298,28 @@ def create_app(config: Config) -> Flask:
         """Return a summary dashboard overview.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             days: int (default 30)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         days = int(request.args.get("days", 30))
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         rate_plan = RATE_PLANS.get(config.rate_plan)
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify({"days_analyzed": 0, "total_usage_kwh": 0, "total_cost": 0})
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=days)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
-            cost_day = db.get_cost_reads(account_id, Resolution.DAY, start, now)
-            cost_hour = db.get_cost_reads(account_id, Resolution.HOUR, start, now)
-            all_cost = cost_day + cost_hour
-
+            hourly, all_cost = _get_combined_reads(db, account_ids, start, now)
             ds = analyzer.daily_stats(hourly if hourly else [], all_cost)
 
             total_usage = sum(d.usage for d in ds)
@@ -303,9 +328,9 @@ def create_app(config: Config) -> Flask:
             cost_days = [d for d in ds if d.cost is not None]
             avg_daily_cost = total_cost / len(cost_days) if cost_days else 0
 
-            # TOU breakdown
+            # TOU breakdown (electric only)
             tou = None
-            if hourly and rate_plan:
+            if hourly and rate_plan and mt == MeterType.ELECTRIC:
                 profile = analyzer.hourly_profile(hourly, rate_plan, tz)
                 peak_kwh = sum(h.avg_usage for h in profile if h.period.value == "peak")
                 offpeak_kwh = sum(h.avg_usage for h in profile if h.period.value == "off_peak")
@@ -313,7 +338,6 @@ def create_app(config: Config) -> Flask:
                 daily_total = peak_kwh + offpeak_kwh + pp_kwh
                 peak_pct = peak_kwh / daily_total * 100 if daily_total > 0 else 0
 
-                # Shift savings
                 savings = analyzer.shift_savings_estimate(profile, rate_plan, 30)
 
                 tou = {
@@ -330,9 +354,9 @@ def create_app(config: Config) -> Flask:
             # Cost projection
             projection = analyzer.cost_projection(ds)
 
-            # Forecasts
+            # Forecasts (combine from all matching accounts)
             forecasts = db.get_latest_forecasts()
-            acct_fc = [f for f in forecasts if f.account_id == account_id]
+            acct_fc = [f for f in forecasts if f.account_id in account_ids]
             fc_data = None
             if acct_fc:
                 fc = acct_fc[0]
@@ -366,28 +390,26 @@ def create_app(config: Config) -> Flask:
         """Return monthly usage and cost summaries.
 
         Query params:
-            account_id: str (required)
+            meter_type: str (default "electric")
             months: int (default 12)
         """
         from . import analyzer
 
-        account_id = request.args.get("account_id")
         months = int(request.args.get("months", 12))
-
-        if not account_id:
-            return jsonify({"error": "account_id required"}), 400
 
         db = _get_db()
         try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify([])
+
             tz = _tz()
             now = datetime.now(tz)
             start = now - timedelta(days=months * 31)
 
-            hourly = db.get_usage_reads(account_id, Resolution.HOUR, start, now)
-            cost_day = db.get_cost_reads(account_id, Resolution.DAY, start, now)
-            cost_hour = db.get_cost_reads(account_id, Resolution.HOUR, start, now)
-            all_cost = cost_day + cost_hour
-
+            hourly, all_cost = _get_combined_reads(db, account_ids, start, now)
             ds = analyzer.daily_stats(hourly if hourly else [], all_cost)
             summaries = analyzer.period_summaries(ds, "monthly")
 

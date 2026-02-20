@@ -363,8 +363,11 @@
     </header>
 
     <div class="controls">
-        <label for="accountSelect">Account:</label>
-        <select id="accountSelect"></select>
+        <label for="meterSelect">Meter:</label>
+        <select id="meterSelect">
+            {% if has_electric %}<option value="electric" selected>All Electric</option>{% endif %}
+            {% if has_gas %}<option value="gas">All Gas</option>{% endif %}
+        </select>
         <label for="daysSelect">Period:</label>
         <select id="daysSelect">
             <option value="7">Last 7 days</option>
@@ -491,70 +494,33 @@
     const USAGE_COLOR = '#38bdf8';
 
     let charts = {};
-    let currentAccountId = null;
 
     // -- Init --
-    document.addEventListener('DOMContentLoaded', async () => {
-        await loadAccounts();
-        refreshAll();
-    });
+    document.addEventListener('DOMContentLoaded', () => refreshAll());
 
-    async function loadAccounts() {
-        try {
-            const res = await fetch('/api/accounts');
-            const accounts = await res.json();
-            const sel = document.getElementById('accountSelect');
-            sel.innerHTML = '';
-
-            // Prefer electric accounts
-            const electric = accounts.filter(a => a.meter_type === 'ELECTRIC');
-            const gas = accounts.filter(a => a.meter_type === 'GAS');
-
-            for (const a of electric) {
-                const opt = document.createElement('option');
-                opt.value = a.id;
-                opt.textContent = `⚡ Electric (${a.account_number || a.id})`;
-                sel.appendChild(opt);
-            }
-            for (const a of gas) {
-                const opt = document.createElement('option');
-                opt.value = a.id;
-                opt.textContent = `🔥 Gas (${a.account_number || a.id})`;
-                sel.appendChild(opt);
-            }
-
-            if (electric.length > 0) {
-                sel.value = electric[0].id;
-            }
-            currentAccountId = sel.value;
-
-            sel.addEventListener('change', () => {
-                currentAccountId = sel.value;
-                refreshAll();
-            });
-        } catch (e) {
-            console.error('Failed to load accounts:', e);
-        }
+    function getMeterType() {
+        return document.getElementById('meterSelect').value;
     }
 
     function getDays() {
         return parseInt(document.getElementById('daysSelect').value);
     }
 
+    document.getElementById('meterSelect').addEventListener('change', () => refreshAll());
     document.getElementById('daysSelect').addEventListener('change', () => refreshAll());
 
     async function refreshAll() {
-        if (!currentAccountId) return;
+        const mt = getMeterType();
         const days = getDays();
 
         // Fetch all data in parallel
         const [summaryRes, dailyRes, hourlyRes, heatmapRes, peakRes, monthlyRes] = await Promise.all([
-            fetch(`/api/summary?account_id=${currentAccountId}&days=${days}`),
-            fetch(`/api/daily?account_id=${currentAccountId}&days=${days}`),
-            fetch(`/api/hourly-profile?account_id=${currentAccountId}&days=${days}`),
-            fetch(`/api/heatmap?account_id=${currentAccountId}&days=${days}`),
-            fetch(`/api/peak-days?account_id=${currentAccountId}&days=${days}&top_n=5`),
-            fetch(`/api/monthly?account_id=${currentAccountId}&months=12`),
+            fetch(`/api/summary?meter_type=${mt}&days=${days}`),
+            fetch(`/api/daily?meter_type=${mt}&days=${days}`),
+            fetch(`/api/hourly-profile?meter_type=${mt}&days=${days}`),
+            fetch(`/api/heatmap?meter_type=${mt}&days=${days}`),
+            fetch(`/api/peak-days?meter_type=${mt}&days=${days}&top_n=5`),
+            fetch(`/api/monthly?meter_type=${mt}&months=12`),
         ]);
 
         const [summary, daily, hourly, heatmap, peakDays, monthly] = await Promise.all([
