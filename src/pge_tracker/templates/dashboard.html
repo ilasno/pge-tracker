@@ -315,6 +315,102 @@
             color: #6ee7b7;
         }
 
+        /* Day detail panel (80/20 split) */
+        .daily-split {
+            display: flex;
+            gap: 1rem;
+        }
+        .daily-chart-area {
+            flex: 1 1 0;
+            min-width: 0;
+        }
+        .day-detail-panel {
+            flex: 0 0 240px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            border-left: 1px solid var(--border);
+            padding-left: 1rem;
+            min-height: 280px;
+        }
+        .day-detail-panel .detail-header {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .day-detail-panel .detail-date {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+        .day-detail-panel .detail-totals {
+            display: flex;
+            gap: 0.75rem;
+            font-size: 0.8rem;
+            margin-bottom: 0.25rem;
+        }
+        .day-detail-panel .detail-totals .total-item {
+            background: var(--surface-2);
+            border-radius: 6px;
+            padding: 0.35rem 0.6rem;
+            text-align: center;
+        }
+        .day-detail-panel .detail-totals .total-val {
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .day-detail-panel .detail-totals .total-label {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+        .day-detail-hours {
+            flex: 1;
+            overflow-y: auto;
+            max-height: 230px;
+        }
+        .day-detail-hours .hour-row {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 2px 0;
+            font-size: 0.72rem;
+        }
+        .day-detail-hours .hour-label {
+            width: 38px;
+            text-align: right;
+            color: var(--text-dim);
+            flex-shrink: 0;
+        }
+        .day-detail-hours .hour-bar-wrap {
+            flex: 1;
+            height: 14px;
+            background: var(--surface-2);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .day-detail-hours .hour-bar {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+        .day-detail-hours .hour-val {
+            width: 70px;
+            text-align: right;
+            color: var(--text-dim);
+            flex-shrink: 0;
+            font-size: 0.68rem;
+        }
+        @media (max-width: 900px) {
+            .daily-split { flex-direction: column; }
+            .day-detail-panel {
+                flex: none;
+                border-left: none;
+                border-top: 1px solid var(--border);
+                padding-left: 0;
+                padding-top: 0.75rem;
+            }
+        }
+
         /* Loading / error */
         .loading {
             text-align: center;
@@ -417,11 +513,32 @@
 
     <!-- Charts -->
     <div class="chart-grid">
-        <!-- Daily Usage Chart -->
+        <!-- Daily Usage Chart + Day Detail -->
         <div class="card">
-            <h2><span class="icon">&#128200;</span> Daily Usage &amp; Cost</h2>
-            <div class="chart-wrap">
-                <canvas id="dailyChart" height="280"></canvas>
+            <h2><span class="icon">&#128200;</span> Daily Usage &amp; Cost <span style="font-size:0.75rem;font-weight:400;color:var(--text-dim);margin-left:0.5rem;">Click a bar to see hourly detail →</span></h2>
+            <div class="daily-split">
+                <div class="daily-chart-area">
+                    <div class="chart-wrap">
+                        <canvas id="dailyChart" height="280"></canvas>
+                    </div>
+                </div>
+                <div class="day-detail-panel" id="dayDetailPanel">
+                    <div class="detail-header" id="dayDetailTitle">Day Detail</div>
+                    <div class="detail-date" id="dayDetailDate">—</div>
+                    <div class="detail-totals">
+                        <div class="total-item">
+                            <div class="total-val" id="dayDetailUsage">—</div>
+                            <div class="total-label">kWh</div>
+                        </div>
+                        <div class="total-item">
+                            <div class="total-val" id="dayDetailCost">—</div>
+                            <div class="total-label">Cost</div>
+                        </div>
+                    </div>
+                    <div class="day-detail-hours" id="dayDetailHours">
+                        <p style="color:var(--text-dim);font-size:0.8rem;padding:1rem 0;">Loading...</p>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -494,6 +611,7 @@
     const USAGE_COLOR = '#38bdf8';
 
     let charts = {};
+    let dailyData = [];  // Store daily data for click lookups
 
     // -- Init --
     document.addEventListener('DOMContentLoaded', () => refreshAll());
@@ -570,6 +688,7 @@
 
     // -- Daily Chart --
     function renderDailyChart(data) {
+        dailyData = data;  // Store for click handler
         const ctx = document.getElementById('dailyChart').getContext('2d');
         if (charts.daily) charts.daily.destroy();
 
@@ -614,6 +733,14 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
+                onClick: (evt, elements) => {
+                    if (elements.length > 0) {
+                        const idx = elements[0].index;
+                        if (dailyData[idx]) {
+                            fetchDayDetail(dailyData[idx].day);
+                        }
+                    }
+                },
                 plugins: {
                     legend: { labels: { color: '#94a3b8', usePointStyle: true } },
                     tooltip: {
@@ -648,6 +775,59 @@
                 }
             }
         });
+
+        // Auto-load the most recent day detail
+        if (data.length > 0) {
+            fetchDayDetail(data[data.length - 1].day);
+        }
+    }
+
+    // -- Day Detail --
+    async function fetchDayDetail(dateStr) {
+        const mt = getMeterType();
+        try {
+            const resp = await fetch(`/api/day-detail?meter_type=${mt}&date=${dateStr}`);
+            const detail = await resp.json();
+            renderDayDetail(detail);
+        } catch(e) {
+            console.error('Failed to fetch day detail:', e);
+        }
+    }
+
+    function renderDayDetail(detail) {
+        if (!detail || !detail.date) return;
+
+        const dt = new Date(detail.date + 'T12:00:00');
+        const formatted = dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+
+        document.getElementById('dayDetailTitle').textContent = detail.day_name;
+        document.getElementById('dayDetailDate').textContent = formatted;
+        document.getElementById('dayDetailUsage').textContent = detail.total_usage.toFixed(1);
+        document.getElementById('dayDetailCost').textContent = detail.total_cost != null
+            ? '$' + detail.total_cost.toFixed(2) : '—';
+
+        const container = document.getElementById('dayDetailHours');
+        const maxUsage = Math.max(...detail.hours.map(h => h.usage), 0.01);
+
+        let html = '';
+        for (const h of detail.hours) {
+            const pct = (h.usage / maxUsage * 100).toFixed(0);
+            let barColor;
+            if (h.period === 'peak') barColor = PEAK_COLOR;
+            else if (h.period === 'part_peak') barColor = PART_PEAK_COLOR;
+            else barColor = OFFPEAK_COLOR;
+
+            const costStr = h.cost != null ? `$${h.cost.toFixed(2)}` : '';
+
+            html += `<div class="hour-row">
+                <span class="hour-label">${HOUR_LABELS[h.hour]}</span>
+                <div class="hour-bar-wrap">
+                    <div class="hour-bar" style="width:${pct}%;background:${barColor};"></div>
+                </div>
+                <span class="hour-val">${h.usage.toFixed(2)} kWh ${costStr}</span>
+            </div>`;
+        }
+        container.innerHTML = html;
     }
 
     // -- Hourly Profile --

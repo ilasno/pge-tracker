@@ -385,6 +385,90 @@ def create_app(config: Config) -> Flask:
         finally:
             db.close()
 
+    @app.route("/api/day-detail")
+    def api_day_detail():
+        """Return hourly usage and cost for a specific date.
+
+        Query params:
+            meter_type: str (default "electric")
+            date: str ISO date (e.g. "2026-02-19")  – defaults to most recent day with data
+        """
+        from . import analyzer
+
+        db = _get_db()
+        try:
+            mt, account_ids = _resolve_meter_type(db)
+            if mt is None:
+                return jsonify({"error": "Invalid meter_type"}), 400
+            if not account_ids:
+                return jsonify({"hours": [], "date": None})
+
+            tz = _tz()
+            rate_plan = RATE_PLANS.get(config.rate_plan)
+
+            raw_date = request.args.get("date")
+            if raw_date:
+                try:
+                    target = date.fromisoformat(raw_date)
+                except ValueError:
+                    return jsonify({"error": "Invalid date format"}), 400
+            else:
+                # Default to most recent day with data
+                now = datetime.now(tz)
+                target = (now - timedelta(days=1)).date()
+
+            start = datetime(target.year, target.month, target.day, 0, 0, 0, tzinfo=tz)
+            end = start + timedelta(days=1)
+
+            hourly = db.get_usage_reads_multi(account_ids, Resolution.HOUR, start, end)
+            cost_hour = db.get_cost_reads_multi(account_ids, Resolution.HOUR, start, end)
+            cost_day = db.get_cost_reads_multi(account_ids, Resolution.DAY, start, end)
+
+            # Aggregate hourly usage by hour (sum across accounts)
+            usage_by_hour: dict[int, float] = {}
+            for r in hourly:
+                h = r.start_time.astimezone(tz).hour
+                usage_by_hour[h] = usage_by_hour.get(h, 0) + r.usage
+
+            # Aggregate hourly cost by hour if available
+            cost_by_hour: dict[int, float] = {}
+            for r in cost_hour:
+                h = r.start_time.astimezone(tz).hour
+                cost_by_hour[h] = cost_by_hour.get(h, 0) + r.cost
+
+            # Daily cost total from daily cost records
+            daily_cost = sum(r.cost for r in cost_day) if cost_day else None
+
+            total_usage = sum(usage_by_hour.values())
+
+            # If no hourly cost data but we have rate plan, estimate per-hour
+            if not cost_by_hour and rate_plan and usage_by_hour:
+                for h, kwh in usage_by_hour.items():
+                    rate = rate_plan.rate_for(target.month, h)
+                    cost_by_hour[h] = round(kwh * rate, 4)
+
+            hours = []
+            for h in range(24):
+                kwh = round(usage_by_hour.get(h, 0), 3)
+                cost = round(cost_by_hour.get(h, 0), 4) if cost_by_hour else None
+                period = rate_plan.classify_hour(h).value if rate_plan else "off_peak"
+                hours.append({
+                    "hour": h,
+                    "usage": kwh,
+                    "cost": cost,
+                    "period": period,
+                })
+
+            return jsonify({
+                "date": target.isoformat(),
+                "day_name": target.strftime("%A"),
+                "total_usage": round(total_usage, 2),
+                "total_cost": round(daily_cost, 2) if daily_cost is not None else round(sum(c for c in cost_by_hour.values()), 2) if cost_by_hour else None,
+                "hours": hours,
+            })
+        finally:
+            db.close()
+
     @app.route("/api/monthly")
     def api_monthly():
         """Return monthly usage and cost summaries.

@@ -235,6 +235,69 @@ class TestSummaryAPI:
         assert data["rate_plan"] == "EV2-A"
 
 
+class TestDayDetailAPI:
+    def test_returns_24_hours(self, client):
+        now = datetime.now(PACIFIC)
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        resp = client.get(f"/api/day-detail?meter_type=electric&date={yesterday}")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["date"] == yesterday
+        assert len(data["hours"]) == 24
+        assert "total_usage" in data
+        assert "total_cost" in data
+        assert "day_name" in data
+
+    def test_hours_have_period_and_usage(self, client):
+        now = datetime.now(PACIFIC)
+        yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        resp = client.get(f"/api/day-detail?meter_type=electric&date={yesterday}")
+        data = json.loads(resp.data)
+        for h in data["hours"]:
+            assert "hour" in h
+            assert "usage" in h
+            assert "cost" in h
+            assert "period" in h
+            assert h["period"] in ("peak", "part_peak", "off_peak")
+
+    def test_peak_hours_usage_higher(self, client):
+        """Peak hours (16-20) should have higher usage (1.5) than off-peak (0.5)."""
+        now = datetime.now(PACIFIC)
+        yesterday = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+        resp = client.get(f"/api/day-detail?meter_type=electric&date={yesterday}")
+        data = json.loads(resp.data)
+        peak_hours = [h for h in data["hours"] if 16 <= h["hour"] < 21]
+        offpeak_hours = [h for h in data["hours"] if h["hour"] < 15]
+        if peak_hours and offpeak_hours:
+            avg_peak = sum(h["usage"] for h in peak_hours) / len(peak_hours)
+            avg_off = sum(h["usage"] for h in offpeak_hours) / len(offpeak_hours)
+            assert avg_peak > avg_off
+
+    def test_defaults_to_yesterday(self, client):
+        resp = client.get("/api/day-detail?meter_type=electric")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        now = datetime.now(PACIFIC)
+        expected = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        assert data["date"] == expected
+
+    def test_invalid_date_returns_400(self, client):
+        resp = client.get("/api/day-detail?meter_type=electric&date=not-a-date")
+        assert resp.status_code == 400
+
+    def test_multi_account_combines(self, multi_client):
+        """Day detail should combine usage from both accounts."""
+        now = datetime.now(PACIFIC)
+        yesterday = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+        resp = multi_client.get(f"/api/day-detail?meter_type=electric&date={yesterday}")
+        data = json.loads(resp.data)
+        # Each account has 0.5 kWh off-peak, 1.5 kWh peak per hour
+        # Combined: off-peak = 1.0, peak = 3.0
+        peak_hour = next((h for h in data["hours"] if h["hour"] == 17), None)
+        if peak_hour:
+            assert peak_hour["usage"] >= 2.5  # 1.5 * 2 accounts
+
+
 class TestMonthlyAPI:
     def test_returns_monthly(self, client):
         resp = client.get("/api/monthly?meter_type=electric&months=1")
