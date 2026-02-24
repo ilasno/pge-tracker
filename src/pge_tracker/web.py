@@ -19,7 +19,7 @@ from flask import Flask, jsonify, render_template, request
 
 from .config import Config
 from .database import Database
-from .models import MeterType, RATE_PLANS, Resolution
+from .models import AnnotationRecord, MeterType, RATE_PLANS, Resolution
 
 
 def create_app(config: Config) -> Flask:
@@ -508,6 +508,82 @@ def create_app(config: Config) -> Flask:
                 }
                 for s in summaries
             ])
+        finally:
+            db.close()
+
+    # --- Annotations ---
+
+    @app.route("/api/annotations")
+    def api_annotations():
+        """Return the most recent annotations.
+
+        Query params:
+            limit: int (default 10)
+        """
+        limit = int(request.args.get("limit", 10))
+
+        db = _get_db()
+        try:
+            annotations = db.get_annotations(limit=limit)
+            return jsonify(annotations)
+        finally:
+            db.close()
+
+    @app.route("/api/annotations", methods=["POST"])
+    def api_add_annotation():
+        """Create a new annotation.
+
+        JSON body:
+            note_date: str (ISO date, required)
+            note_time: str (HH:MM, optional)
+            description: str (required)
+        """
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({"error": "Request body required"}), 400
+
+        raw_date = data.get("note_date")
+        description = (data.get("description") or "").strip()
+
+        if not raw_date:
+            return jsonify({"error": "note_date is required"}), 400
+        if not description:
+            return jsonify({"error": "description is required"}), 400
+
+        try:
+            note_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return jsonify({"error": "Invalid date format (use YYYY-MM-DD)"}), 400
+
+        note_time = data.get("note_time") or None
+
+        annotation = AnnotationRecord(
+            note_date=note_date,
+            note_time=note_time,
+            description=description,
+        )
+
+        db = _get_db()
+        try:
+            row_id = db.add_annotation(annotation)
+            return jsonify({"id": row_id, "status": "created"}), 201
+        finally:
+            db.close()
+
+    @app.route("/api/annotation-dates")
+    def api_annotation_dates():
+        """Return set of dates that have annotations (for chart markers).
+
+        Query params:
+            dates: comma-separated ISO dates
+        """
+        raw = request.args.get("dates", "")
+        dates = [d.strip() for d in raw.split(",") if d.strip()]
+
+        db = _get_db()
+        try:
+            annotated = db.get_annotations_for_dates(dates)
+            return jsonify(list(annotated))
         finally:
             db.close()
 

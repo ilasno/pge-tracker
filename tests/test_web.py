@@ -298,6 +298,79 @@ class TestDayDetailAPI:
             assert peak_hour["usage"] >= 2.5  # 1.5 * 2 accounts
 
 
+class TestAnnotationsAPI:
+    def test_get_empty(self, client):
+        resp = client.get("/api/annotations")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == []
+
+    def test_post_and_get(self, client):
+        resp = client.post(
+            "/api/annotations",
+            data=json.dumps({
+                "note_date": "2026-02-20",
+                "note_time": "14:30",
+                "description": "Started pre-cooling house",
+            }),
+            content_type="application/json",
+        )
+        assert resp.status_code == 201
+        result = json.loads(resp.data)
+        assert result["status"] == "created"
+        assert "id" in result
+
+        # Verify it shows up in GET
+        resp = client.get("/api/annotations?limit=10")
+        data = json.loads(resp.data)
+        assert len(data) == 1
+        assert data[0]["note_date"] == "2026-02-20"
+        assert data[0]["note_time"] == "14:30"
+        assert data[0]["description"] == "Started pre-cooling house"
+
+    def test_post_missing_date(self, client):
+        resp = client.post(
+            "/api/annotations",
+            data=json.dumps({"description": "test"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_post_missing_description(self, client):
+        resp = client.post(
+            "/api/annotations",
+            data=json.dumps({"note_date": "2026-02-20"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_post_invalid_date(self, client):
+        resp = client.post(
+            "/api/annotations",
+            data=json.dumps({"note_date": "not-a-date", "description": "test"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_annotation_dates_endpoint(self, client):
+        # Add two annotations on different dates
+        client.post(
+            "/api/annotations",
+            data=json.dumps({"note_date": "2026-02-20", "description": "Note A"}),
+            content_type="application/json",
+        )
+        client.post(
+            "/api/annotations",
+            data=json.dumps({"note_date": "2026-02-22", "description": "Note B"}),
+            content_type="application/json",
+        )
+
+        resp = client.get("/api/annotation-dates?dates=2026-02-20,2026-02-21,2026-02-22")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert set(data) == {"2026-02-20", "2026-02-22"}
+
+
 class TestMonthlyAPI:
     def test_returns_monthly(self, client):
         resp = client.get("/api/monthly?meter_type=electric&months=1")

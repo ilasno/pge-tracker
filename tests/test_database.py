@@ -235,3 +235,90 @@ def test_db_stats(tmp_db: Database, electric_account: AccountRecord):
     stats = tmp_db.get_db_stats()
     assert stats["accounts"] == 1
     assert stats["usage_reads"] == 0
+    assert stats["annotations"] == 0
+
+
+# --- Annotation tests ---
+
+
+def test_add_annotation(tmp_db: Database):
+    from datetime import date
+
+    from pge_tracker.models import AnnotationRecord
+
+    ann = AnnotationRecord(
+        note_date=date(2026, 2, 20),
+        note_time="14:30",
+        description="Started pre-cooling before peak",
+    )
+    row_id = tmp_db.add_annotation(ann)
+    assert row_id is not None
+    assert row_id > 0
+
+    annotations = tmp_db.get_annotations(limit=10)
+    assert len(annotations) == 1
+    assert annotations[0]["note_date"] == "2026-02-20"
+    assert annotations[0]["note_time"] == "14:30"
+    assert annotations[0]["description"] == "Started pre-cooling before peak"
+
+
+def test_get_annotations_ordering(tmp_db: Database):
+    from datetime import date
+
+    from pge_tracker.models import AnnotationRecord
+
+    tmp_db.add_annotation(AnnotationRecord(
+        note_date=date(2026, 2, 18), note_time=None, description="First note",
+    ))
+    tmp_db.add_annotation(AnnotationRecord(
+        note_date=date(2026, 2, 22), note_time=None, description="Third note",
+    ))
+    tmp_db.add_annotation(AnnotationRecord(
+        note_date=date(2026, 2, 20), note_time=None, description="Second note",
+    ))
+
+    annotations = tmp_db.get_annotations(limit=10)
+    assert len(annotations) == 3
+    # Newest date first
+    assert annotations[0]["note_date"] == "2026-02-22"
+    assert annotations[1]["note_date"] == "2026-02-20"
+    assert annotations[2]["note_date"] == "2026-02-18"
+
+
+def test_get_annotations_limit(tmp_db: Database):
+    from datetime import date, timedelta
+
+    from pge_tracker.models import AnnotationRecord
+
+    for i in range(15):
+        d = date(2026, 1, 1) + timedelta(days=i)
+        tmp_db.add_annotation(AnnotationRecord(
+            note_date=d, note_time=None, description=f"Note {i}",
+        ))
+
+    annotations = tmp_db.get_annotations(limit=10)
+    assert len(annotations) == 10
+
+
+def test_get_annotations_for_dates(tmp_db: Database):
+    from datetime import date
+
+    from pge_tracker.models import AnnotationRecord
+
+    tmp_db.add_annotation(AnnotationRecord(
+        note_date=date(2026, 2, 20), note_time=None, description="Note A",
+    ))
+    tmp_db.add_annotation(AnnotationRecord(
+        note_date=date(2026, 2, 22), note_time=None, description="Note B",
+    ))
+
+    result = tmp_db.get_annotations_for_dates(["2026-02-20", "2026-02-21", "2026-02-22"])
+    assert "2026-02-20" in result
+    assert "2026-02-22" in result
+    assert "2026-02-21" not in result
+
+
+def test_annotations_table_in_stats(tmp_db: Database):
+    stats = tmp_db.get_db_stats()
+    assert "annotations" in stats
+    assert stats["annotations"] == 0

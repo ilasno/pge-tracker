@@ -411,6 +411,68 @@
             }
         }
 
+        /* Annotations */
+        .annotations-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        @media (max-width: 900px) {
+            .annotations-section { grid-template-columns: 1fr; }
+        }
+        .annotation-form {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .annotation-form .form-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .annotation-form input,
+        .annotation-form textarea {
+            background: var(--surface-2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+        .annotation-form input:focus,
+        .annotation-form textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .annotation-form textarea {
+            resize: vertical;
+            min-height: 56px;
+        }
+        .annotation-list {
+            max-height: 260px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .annotation-item {
+            background: var(--surface-2);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            border-left: 3px solid var(--accent);
+        }
+        .annotation-item .ann-date {
+            font-size: 0.75rem;
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .annotation-item .ann-desc {
+            font-size: 0.82rem;
+            color: var(--text);
+            margin-top: 0.1rem;
+        }
+
         /* Loading / error */
         .loading {
             text-align: center;
@@ -579,6 +641,28 @@
         </div>
     </div>
 
+    <!-- Energy Notes -->
+    <div class="card" style="margin-top: 1.5rem;">
+        <h2><span class="icon">&#128221;</span> Energy Notes</h2>
+        <div class="annotations-section">
+            <div>
+                <div class="annotation-form" id="annotationForm">
+                    <div class="form-row">
+                        <input type="date" id="annDate" style="flex:1;" />
+                        <input type="time" id="annTime" style="flex:0 0 120px;" />
+                    </div>
+                    <textarea id="annDesc" placeholder="What changed? e.g., Started pre-cooling house before peak hours" rows="2"></textarea>
+                    <button class="btn" onclick="submitAnnotation()" style="align-self:flex-start;">Add Note</button>
+                </div>
+            </div>
+            <div>
+                <div class="annotation-list" id="annotationList">
+                    <p style="color:var(--text-dim);font-size:0.8rem;">Loading notes...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Savings Banner -->
     <div class="savings-banner" id="savingsBanner" style="display: none;">
         <h3>&#128161; Peak-Shift Savings Opportunity</h3>
@@ -609,6 +693,34 @@
     const OFFPEAK_COLOR = '#22c55e';
     const COST_COLOR = '#a78bfa';
     const USAGE_COLOR = '#38bdf8';
+
+    // Chart.js plugin: yellow dots on daily bars that have annotations
+    const annotationDotsPlugin = {
+        id: 'annotationDots',
+        afterDraw(chart) {
+            const opts = chart.options.plugins.annotationDots;
+            if (!opts || !opts.annotatedSet || opts.annotatedSet.size === 0) return;
+            const { ctx } = chart;
+            const meta = chart.getDatasetMeta(0);
+            const { annotatedSet, rawData } = opts;
+            meta.data.forEach((bar, i) => {
+                if (rawData[i] && annotatedSet.has(rawData[i].day)) {
+                    const x = bar.x;
+                    const y = bar.y - 8;
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = '#facc15';
+                    ctx.fill();
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            });
+        }
+    };
+    Chart.register(annotationDotsPlugin);
 
     let charts = {};
     let dailyData = [];  // Store daily data for click lookups
@@ -655,6 +767,9 @@
         updateSavingsBanner(summary);
 
         document.getElementById('lastUpdated').textContent = new Date().toLocaleString();
+
+        loadAnnotations();
+        document.getElementById('annDate').valueAsDate = new Date();
     }
 
     // -- KPIs --
@@ -779,6 +894,21 @@
         // Auto-load the most recent day detail
         if (data.length > 0) {
             fetchDayDetail(data[data.length - 1].day);
+        }
+
+        // Fetch annotation dates and mark them on the chart
+        const datelist = data.map(d => d.day).join(',');
+        if (datelist) {
+            fetch(`/api/annotation-dates?dates=${datelist}`)
+                .then(r => r.json())
+                .then(annotatedDates => {
+                    charts.daily.options.plugins.annotationDots = {
+                        annotatedSet: new Set(annotatedDates),
+                        rawData: data,
+                    };
+                    charts.daily.update('none');
+                })
+                .catch(() => {});
         }
     }
 
@@ -1084,6 +1214,85 @@
                 }
             }
         });
+    }
+
+    // -- Annotations --
+    async function loadAnnotations() {
+        try {
+            const resp = await fetch('/api/annotations?limit=10');
+            const data = await resp.json();
+            renderAnnotationList(data);
+        } catch(e) {
+            console.error('Failed to load annotations:', e);
+        }
+    }
+
+    function renderAnnotationList(annotations) {
+        const container = document.getElementById('annotationList');
+        if (!annotations || annotations.length === 0) {
+            container.innerHTML = '<p style="color:var(--text-dim);font-size:0.8rem;">No notes yet. Add one to track your energy changes!</p>';
+            return;
+        }
+        let html = '';
+        for (const ann of annotations) {
+            const dt = new Date(ann.note_date + 'T12:00:00');
+            const formatted = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            const timeStr = ann.note_time ? ` at ${ann.note_time}` : '';
+            html += `<div class="annotation-item">
+                <div class="ann-date">${formatted}${timeStr}</div>
+                <div class="ann-desc">${escapeHtml(ann.description)}</div>
+            </div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    async function submitAnnotation() {
+        const dateInput = document.getElementById('annDate');
+        const timeInput = document.getElementById('annTime');
+        const descInput = document.getElementById('annDesc');
+
+        const noteDate = dateInput.value;
+        const noteTime = timeInput.value || null;
+        const description = descInput.value.trim();
+
+        if (!noteDate) { alert('Please select a date.'); return; }
+        if (!description) { alert('Please enter a description.'); return; }
+
+        try {
+            const resp = await fetch('/api/annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    note_date: noteDate,
+                    note_time: noteTime,
+                    description: description,
+                }),
+            });
+
+            if (resp.ok) {
+                descInput.value = '';
+                timeInput.value = '';
+                loadAnnotations();
+                // Refresh daily chart to update annotation marker dots
+                const mt = getMeterType();
+                const days = getDays();
+                const dailyRes = await fetch(`/api/daily?meter_type=${mt}&days=${days}`);
+                const daily = await dailyRes.json();
+                renderDailyChart(daily);
+            } else {
+                const err = await resp.json();
+                alert('Error: ' + (err.error || 'Failed to save note'));
+            }
+        } catch(e) {
+            alert('Failed to save note.');
+            console.error(e);
+        }
     }
 
     // -- Savings Banner --

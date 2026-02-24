@@ -247,6 +247,15 @@ class PeakDayDetail:
 
 
 @dataclass
+class AnnotationRecord:
+    """A user note about an energy behavior change."""
+
+    note_date: date
+    note_time: str | None  # e.g. "14:30" or None
+    description: str
+
+
+@dataclass
 class ShiftSavings:
     """Estimated savings from shifting peak usage to off-peak."""
 

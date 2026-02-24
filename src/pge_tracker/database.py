@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .models import (
     AccountRecord,
+    AnnotationRecord,
     CostRecord,
     DataSource,
     ForecastRecord,
@@ -91,6 +92,17 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     error_message    TEXT,
     fetched_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS annotations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_date        TEXT NOT NULL,
+    note_time        TEXT,
+    description      TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_annotations_date
+    ON annotations(note_date);
 """
 
 
@@ -439,11 +451,50 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    # --- Annotations ---
+
+    def add_annotation(self, annotation: AnnotationRecord) -> int:
+        """Insert a new annotation and return its id."""
+        now = datetime.now(UTC).isoformat()
+        cursor = self._conn.execute(
+            """INSERT INTO annotations
+               (note_date, note_time, description, created_at)
+               VALUES (?, ?, ?, ?)
+            """,
+            (
+                annotation.note_date.isoformat(),
+                annotation.note_time,
+                annotation.description,
+                now,
+            ),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    def get_annotations(self, limit: int = 10) -> list[dict]:
+        """Return the most recent annotations, newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM annotations ORDER BY note_date DESC, created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_annotations_for_dates(self, dates: list[str]) -> set[str]:
+        """Return the set of dates (ISO strings) that have at least one annotation."""
+        if not dates:
+            return set()
+        placeholders = ",".join("?" for _ in dates)
+        rows = self._conn.execute(
+            f"SELECT DISTINCT note_date FROM annotations WHERE note_date IN ({placeholders})",  # noqa: S608
+            dates,
+        ).fetchall()
+        return {r["note_date"] for r in rows}
+
     # --- Utilities ---
 
     def get_db_stats(self) -> dict:
         stats = {}
-        for table in ("accounts", "usage_reads", "cost_reads", "forecasts", "fetch_log"):
+        for table in ("accounts", "usage_reads", "cost_reads", "forecasts", "fetch_log", "annotations"):
             row = self._conn.execute(
                 f"SELECT COUNT(*) as cnt FROM {table}"  # noqa: S608
             ).fetchone()
