@@ -99,7 +99,7 @@
         /* Cards grid */
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 1rem;
             margin-bottom: 1.5rem;
         }
@@ -573,6 +573,28 @@
         </div>
     </div>
 
+    <!-- Energy Notes -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <h2><span class="icon">&#128221;</span> Energy Notes</h2>
+        <div class="annotations-section">
+            <div>
+                <div class="annotation-form" id="annotationForm">
+                    <div class="form-row">
+                        <input type="date" id="annDate" style="flex:1;" />
+                        <input type="time" id="annTime" style="flex:0 0 120px;" />
+                    </div>
+                    <textarea id="annDesc" placeholder="What changed? e.g., Started pre-cooling house before peak hours" rows="2"></textarea>
+                    <button class="btn" onclick="submitAnnotation()" style="align-self:flex-start;">Add Note</button>
+                </div>
+            </div>
+            <div>
+                <div class="annotation-list" id="annotationList">
+                    <p style="color:var(--text-dim);font-size:0.8rem;">Loading notes...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Charts -->
     <div class="chart-grid">
         <!-- Daily Usage Chart + Day Detail -->
@@ -636,28 +658,6 @@
                 <h2><span class="icon">&#9888;&#65039;</span> Worst Peak Days</h2>
                 <div id="peakDaysContainer">
                     <div class="loading"><div class="spinner"></div><p>Loading...</p></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Energy Notes -->
-    <div class="card" style="margin-top: 1.5rem;">
-        <h2><span class="icon">&#128221;</span> Energy Notes</h2>
-        <div class="annotations-section">
-            <div>
-                <div class="annotation-form" id="annotationForm">
-                    <div class="form-row">
-                        <input type="date" id="annDate" style="flex:1;" />
-                        <input type="time" id="annTime" style="flex:0 0 120px;" />
-                    </div>
-                    <textarea id="annDesc" placeholder="What changed? e.g., Started pre-cooling house before peak hours" rows="2"></textarea>
-                    <button class="btn" onclick="submitAnnotation()" style="align-self:flex-start;">Add Note</button>
-                </div>
-            </div>
-            <div>
-                <div class="annotation-list" id="annotationList">
-                    <p style="color:var(--text-dim);font-size:0.8rem;">Loading notes...</p>
                 </div>
             </div>
         </div>

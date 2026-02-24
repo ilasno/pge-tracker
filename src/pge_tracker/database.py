@@ -474,7 +474,7 @@ class Database:
     def get_annotations(self, limit: int = 10) -> list[dict]:
         """Return the most recent annotations, newest first."""
         rows = self._conn.execute(
-            "SELECT * FROM annotations ORDER BY note_date DESC, created_at DESC LIMIT ?",
+            "SELECT * FROM annotations ORDER BY note_date DESC, note_time DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
