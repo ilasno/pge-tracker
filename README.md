@@ -107,6 +107,8 @@ The dashboard provides six views of your energy data:
 
 Use the account selector to switch between electric and gas meters, and the period picker to adjust the time window (7 days to 1 year).
 
+<img width="1188" height="1880" alt="Screenshot 2026-02-26 at 11 32 39 AM" src="https://github.com/user-attachments/assets/3fad9a21-0ae4-46f8-a631-4ec58ace42ff" />
+
 ## Automated Background Services (macOS)
 
 Two launchd plists are included in `scripts/`:
