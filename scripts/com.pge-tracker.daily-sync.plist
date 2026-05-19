@@ -9,11 +9,11 @@
     <key>ProgramArguments</key>
     <array>
         <!-- UPDATE this path to match your project location -->
-        <string>/Users/ilasno/_Working/HomeDev/pge-tracker/scripts/daily-sync.sh</string>
+        <string>/Users/ilasno/pooz-hub/dev/pge-tracker/scripts/daily-sync.sh</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker</string>
 
     <!-- Run daily at 6:00 AM -->
     <key>StartCalendarInterval</key>
@@ -30,9 +30,9 @@
 
     <!-- Redirect stdout/stderr to log files -->
     <key>StandardOutPath</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/launchd-stdout.log</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker/data/logs/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/launchd-stderr.log</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker/data/logs/launchd-stderr.log</string>
 
     <!-- Include PATH so it can find the venv python -->
     <key>EnvironmentVariables</key>

@@ -7,14 +7,14 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ilasno/_Working/HomeDev/pge-tracker/.venv/bin/pge-tracker</string>
+        <string>/Users/ilasno/pooz-hub/dev/pge-tracker/.venv/bin/pge-tracker</string>
         <string>web</string>
         <string>--port</string>
         <string>8080</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker</string>
 
     <!-- Start automatically when loaded (i.e., at login) -->
     <key>RunAtLoad</key>
@@ -30,9 +30,9 @@
 
     <!-- Redirect stdout/stderr to log files -->
     <key>StandardOutPath</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/web-stdout.log</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker/data/logs/web-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ilasno/_Working/HomeDev/pge-tracker/data/logs/web-stderr.log</string>
+    <string>/Users/ilasno/pooz-hub/dev/pge-tracker/data/logs/web-stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
